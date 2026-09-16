@@ -488,26 +488,32 @@ function renderMouvements(body) {
 function openMoveModal(onDone) {
   const productOpts = cache.products.map((p) => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
   const locOpts = LOCATIONS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
-  openModal(`<h3>Enregistrer une entrée / sortie</h3>
-    <div class="form-grid">
-      <label>Type<select id="mvDir" class="bo-input">
-        <option value="in">Entrée (réassort, remboursement…)</option>
-        <option value="out">Sortie (autre que vente)</option>
-      </select></label>
-      <label>Article<select id="mvProd" class="bo-input">${productOpts}</select></label>
+  openModal(`<h3>Entrée / sortie</h3>
+    <div class="move-form form-grid">
+      <label class="move-span">Type
+        <select id="mvDir" class="bo-input">
+          <option value="in">Entrée</option>
+          <option value="out">Sortie</option>
+        </select>
+      </label>
+      <label class="move-span">Article
+        <select id="mvProd" class="bo-input">${productOpts}</select>
+      </label>
       <label>Taille<select id="mvSize" class="bo-input"></select></label>
-      <label>Quantité<input id="mvQty" class="bo-input" type="number" min="1" value="1"></label>
+      <label>Quantité<input id="mvQty" class="bo-input" type="number" inputmode="numeric" min="1" value="1"></label>
       <label>Emplacement<select id="mvLoc" class="bo-input">${locOpts}</select></label>
       <label>Motif<select id="mvReason" class="bo-input">
         <option value="reassort">Réassort / entrée</option>
         <option value="remboursement">Remboursement</option>
         <option value="ajustement">Ajustement / autre</option>
       </select></label>
-      <label>Note<input id="mvNote" class="bo-input" placeholder="optionnel"></label>
+      <label class="move-span">Note<input id="mvNote" class="bo-input" placeholder="optionnel"></label>
     </div>
-    <p class="muted mini">Une vente en caisse crée automatiquement une sortie. Annuler une vente crée une entrée « remboursement ».</p>
+    <p class="muted mini move-hint">Une vente en caisse crée une sortie. Annuler une vente crée une entrée « remboursement ».</p>
     <div class="modal-actions"><button class="bo-btn" data-close>Annuler</button>
     <button class="bo-btn primary" id="mvSave">Enregistrer</button></div>`, (m) => {
+    const sheet = m.querySelector('.modal');
+    if (sheet) sheet.classList.add('move-modal');
     const fillSizes = () => {
       const p = cache.products.find((x) => x.id === m.querySelector('#mvProd').value);
       m.querySelector('#mvSize').innerHTML = (p?.variants || []).map((v) =>
