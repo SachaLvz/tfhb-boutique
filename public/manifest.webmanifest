@@ -1,0 +1,13 @@
+{
+  "name": "Caisse Boutique TFHB",
+  "short_name": "Caisse TFHB",
+  "description": "Caisse et gestion de stock de la boutique du Tremblay Handball",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#103a5c",
+  "theme_color": "#103a5c",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
