@@ -57,6 +57,9 @@ button{font-family:inherit;touch-action:manipulation}
 .chip{display:flex;align-items:center;gap:7px;font-weight:700;font-size:12.5px;color:#ffe08a;
   background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);padding:7px 12px;border-radius:999px}
 .chip.online{color:#8fe9b4}
+.chip.syncing{color:#9fd4ff}
+.chip.syncing .dot{animation:netPulse .9s ease-in-out infinite}
+@keyframes netPulse{50%{opacity:.3}}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px rgba(255,255,255,.12)}
 
 main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain}
@@ -376,6 +379,7 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 
 @media (prefers-reduced-motion:reduce){
   .page-loader-spin{animation:none;border-top-color:var(--line);border-color:var(--blue)}
+  .chip.syncing .dot{animation:none}
 }
 
 /* =========================================================

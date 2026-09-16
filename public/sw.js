@@ -1,7 +1,7 @@
 // Service worker : cache applicatif pour le fonctionnement hors-ligne.
 // Stratégie : app-shell en cache-first, mise à jour en arrière-plan.
 // Ne jamais cacher /_next/ ni /api/ (sinon le hot reload / les mises à jour cassent).
-const CACHE = 'tfhb-caisse-next-v2';
+const CACHE = 'tfhb-caisse-next-v3';
 const ASSETS = [
   '/',
   '/manifest.webmanifest',
@@ -11,6 +11,21 @@ const ASSETS = [
   '/fonts/oswald-500.woff2',
   '/fonts/oswald-600.woff2',
   '/fonts/oswald-700.woff2',
+  '/assets/clubs/nantes.png',
+  '/assets/clubs/saint-raphael.png',
+  '/assets/clubs/selestat.png',
+  '/assets/clubs/montpellier.png',
+  '/assets/clubs/cesson-rennes.png',
+  '/assets/clubs/caen.png',
+  '/assets/clubs/toulouse.png',
+  '/assets/clubs/aix.png',
+  '/assets/clubs/nimes.png',
+  '/assets/clubs/chartres.png',
+  '/assets/clubs/paris.png',
+  '/assets/clubs/saran.png',
+  '/assets/clubs/chambery.png',
+  '/assets/clubs/limoges.png',
+  '/assets/clubs/dunkerque.png',
 ];
 
 function shouldBypassCache(url) {

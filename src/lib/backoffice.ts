@@ -150,12 +150,12 @@ function drawCatTable(body, filter) {
   const rows = [];
   for (const p of cache.products) {
     if (filter && !p.name.toLowerCase().includes(filter)) continue;
-    const hasPhoto = !!cache.photos[p.id];
+    const photo = cache.photos[p.id] || `/assets/produits/${p.id}.png`;
     rows.push(`<tr class="prow"><td colspan="5"><span class="prow-main">
-        ${hasPhoto ? `<img class="prow-thumb" src="${cache.photos[p.id]}" alt="">` : ''}
+        <img class="prow-thumb" src="${photo}" alt="" onerror="this.remove()">
         <b>${p.name}</b> <span class="cat-badge">${p.category}</span>
-        <button class="bo-btn mini" data-photo="${p.id}">📷 ${hasPhoto ? 'Changer la photo' : 'Ajouter une photo'}</button>
-        ${hasPhoto ? `<button class="bo-btn mini" data-photodel="${p.id}">Retirer</button>` : ''}
+        <button class="bo-btn mini" data-photo="${p.id}">📷 ${cache.photos[p.id] ? 'Changer la photo' : 'Ajouter une photo'}</button>
+        ${cache.photos[p.id] ? `<button class="bo-btn mini" data-photodel="${p.id}">Retirer</button>` : ''}
       </span></td>
       <td colspan="6" class="muted">${p.variants.length} taille(s)</td>
       <td><button class="bo-x" data-del="${p.id}" title="Supprimer l'article">🗑</button></td></tr>`);

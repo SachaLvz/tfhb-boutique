@@ -1,12 +1,12 @@
 // @ts-nocheck — logique legacy migrée ; typage progressif
-// Catalogue TFHB — extrait fidèlement des fichiers Excel
-// « Caisse Boutique TFHB 25-26 / 26-27 ». Prix taille-dépendants.
-// Sert à l'import initial (aucune ressaisie à la main).
+// Catalogue TFHB — boutique officielle WePlay
+// https://boutique.osports.fr/tremblay-handball/ (scrapé le 16/09/2026).
 
 export const SIZE_SYSTEMS = {
-  maillot_enfant: ['5-6 ans', '7/8', '9/10', '11/12', '13/14', '15/16'],
-  textile_enfant: ['4-6 ans', '6/8', '8/10', '10/12', '12/14'],
-  adulte: ['S', 'M', 'L', 'XL', '2XL'],
+  maillot_enfant: ['5/6 ans', '7/8 ans', '9/10 ans', '11/12 ans', '13/14 ans', '15/16 ans'],
+  textile_enfant: ['4/6 ans', '6/8 ans', '8/10 ans', '10/12 ans', '12/14 ans'],
+  adidas_junior: ['116', '128', '140', '152', '164', '176'],
+  adulte: ['S', 'M', 'L', 'XL', 'XXL', '2XL'],
   tu: ['TU'],
 };
 
@@ -37,55 +37,91 @@ function tu(price, opts = {}) {
   return [{ size: 'TU', size_system: 'tu', sale_price: price, purchase_price_ht: opts.achat ?? null, marking_cost: opts.marquage ?? 0 }];
 }
 
-// id stable = slug, sert de préfixe SKU (id|taille)
+function priced(sizes, system, price, ht) {
+  return sizes.map((s) => ({
+    size: s, size_system: system, sale_price: price,
+    purchase_price_ht: ht, marking_cost: 0,
+  }));
+}
+
+// Catalogue officiel WePlay / [boutique.osports.fr](https://boutique.osports.fr/tremblay-handball/)
+// (scrapé le 16/09/2026). Tailles = celles réellement proposées en ligne.
 export const SEED_CATALOG = [
-  // --- Maillots ---
-  { id: 'maillot_bleu', name: 'Maillot Bleu (Domicile)', category: 'Maillot', variants: childAdult('maillot_enfant', 60, 70) },
-  { id: 'maillot_blanc', name: 'Maillot Blanc (Extérieur)', category: 'Maillot', variants: childAdult('maillot_enfant', 60, 70) },
-  { id: 'maillot_rose', name: 'Maillot Rose', category: 'Maillot', variants: childAdult('maillot_enfant', 50, 60) },
-
-  // --- Fin de saison 25/26 (déstockage) ---
-  { id: 'maillot_domicile_2526', name: 'Maillot Domicile 25/26', category: '25/26', variants: childOnly('maillot_enfant', 40) },
-  { id: 'maillot_exterieur_2526', name: 'Maillot Extérieur 25/26', category: '25/26', variants: childOnly('maillot_enfant', 40) },
-  { id: 'warmup', name: 'Maillot WarmUp 25/26', category: '25/26', variants: childOnly('maillot_enfant', 40) },
-  { id: 'gardien_vert', name: 'Maillot Gardien Vert 25/26', category: '25/26', variants: adultOnly(75) },
-
-  // --- Textiles ---
-  { id: 'entrainement', name: 'Entraînement', category: 'Textile', variants: adultOnly(22) },
-  { id: 'tshirt_blanc', name: 'T-shirt Blanc', category: 'Textile', variants: childAdult('textile_enfant', 15, 25) },
-  { id: 'tshirt_bleu', name: 'T-shirt Bleu', category: 'Textile', variants: childAdult('textile_enfant', 15, 15) },
-  { id: 'tshirt_noir', name: 'T-shirt Noir', category: 'Textile', variants: childAdult('textile_enfant', 20, 25) },
-  { id: 'pull_bleu', name: 'Pull Bleu', category: 'Textile', variants: childAdult('textile_enfant', 40, 45) },
-  { id: 'pull_noir', name: 'Pull Noir', category: 'Textile', variants: childAdult('textile_enfant', 40, 45) },
-
-  // --- Accessoires (TU) ---
-  { id: 'echarpe', name: 'Écharpe', category: 'Accessoire', variants: tu(10) },
-  { id: 'tote_bag', name: 'Tote bag', category: 'Accessoire', variants: tu(10) },
-  { id: 'stylo', name: 'Stylo', category: 'Accessoire', variants: tu(2) },
-  { id: 'pins', name: 'Pins', category: 'Accessoire', variants: tu(2) },
-  { id: 'porte_cles', name: 'Porte-clés', category: 'Accessoire', variants: tu(3) },
-  { id: 'decapsuleur', name: 'Décapsuleur', category: 'Accessoire', variants: tu(3) },
-  { id: 'poster', name: 'Poster', category: 'Accessoire', variants: tu(1) },
-
-  // --- Ballons (rangés dans Accessoires) ---
-  { id: 'ballon_promo', name: 'Ballon Promo', category: 'Accessoire', variants: tu(15) },
-  { id: 'ballon_t3', name: 'Ballon T3', category: 'Accessoire', variants: tu(30) },
+  // --- Maillot ---
+  { id: 'maillot_domicile_bleu_adulte_2627', name: 'Maillot Domicile Bleu Adulte 26/27', category: 'Maillot',
+    variants: priced(['S', 'M', 'XL', 'XXL'], 'adulte', 75, 62.5) },
+  { id: 'maillot_domicile_bleu_enfant_2627', name: 'Maillot Domicile Bleu Enfant 26/27', category: 'Maillot',
+    variants: priced(['5/6 ans', '7/8 ans', '9/10 ans', '11/12 ans', '13/14 ans', '15/16 ans'], 'maillot_enfant', 65, 54.17) },
+  { id: 'maillot_exterieur_adulte_adidas', name: 'Maillot Extérieur Adulte Blanc 26/27', category: 'Maillot',
+    variants: priced(['S', 'M', 'L', 'XL', 'XXL'], 'adulte', 75, 62.5) },
+  { id: 'maillot_exterieur_blanc_enfant_2627', name: 'Maillot Extérieur Blanc Enfant 26/27', category: 'Maillot',
+    variants: priced(['5/6 ans', '7/8 ans', '9/10 ans', '11/12 ans', '13/14 ans', '15/16 ans'], 'maillot_enfant', 65, 54.17) },
+  { id: 'maillot_pre_match_adidas_adulte_2627', name: 'Maillot Pré-Match Adidas Adulte 26/27', category: 'Maillot',
+    variants: priced(['XXL'], 'adulte', 65, 54.17) },
+  { id: 'maillot_pre_match_enfant_2627', name: 'Maillot Pré-Match Enfant 26/27', category: 'Maillot',
+    variants: priced(['9/10 ans', '11/12 ans', '13/14 ans'], 'maillot_enfant', 55, 45.83) },
+  { id: 'maillot_domicile_junior_adidas', name: 'Maillot Domicile Junior Adidas', category: 'Maillot',
+    variants: priced(['116', '128', '140', '152', '164', '176'], 'adidas_junior', 60, 50) },
+  { id: 'maillot_exterieur_junior_adidas', name: 'Maillot Extérieur Junior Adidas', category: 'Maillot',
+    variants: priced(['116', '128', '140', '152', '164'], 'adidas_junior', 60, 50) },
+  { id: 'maillot_warm_up_adidas_junior', name: 'Maillot Warm up Adidas Junior', category: 'Maillot',
+    variants: priced(['116', '128', '140'], 'adidas_junior', 50, 41.67) },
+  // --- Floqué ---
+  { id: 'maillot_floque_domicile_bleu_adulte_2627', name: 'Maillot Floqué Domicile Bleu Adulte 26/27', category: 'Floqué',
+    variants: priced(['S', 'M', 'L', 'XL', 'XXL'], 'adulte', 83, 69.17) },
+  { id: 'maillot_floque_domicile_bleu_enfant_2627', name: 'Maillot Floqué Domicile Bleu Enfant 26/27', category: 'Floqué',
+    variants: priced(['5/6 ans', '7/8 ans', '9/10 ans', '11/12 ans', '13/14 ans', '15/16 ans'], 'maillot_enfant', 73, 60.83) },
+  { id: 'maillot_floque_exterieur_adulte_blanc_2627', name: 'Maillot Floqué Extérieur Adulte Blanc 26/27', category: 'Floqué',
+    variants: priced(['M', 'L', 'XL', 'XXL'], 'adulte', 83, 69.17) },
+  { id: 'maillot_floque_exterieur_blanc_enfant_2627', name: 'Maillot Floqué Extérieur Blanc Enfant 26/27', category: 'Floqué',
+    variants: priced(['5/6 ans', '7/8 ans', '9/10 ans', '11/12 ans', '13/14 ans', '15/16 ans'], 'maillot_enfant', 73, 60.83) },
+  { id: 'maillot_floque_pre_match_adidas_adulte_2627', name: 'Maillot Floqué Pré-Match Adidas Adulte 26/27', category: 'Floqué',
+    variants: priced(['XXL'], 'adulte', 73, 60.83) },
+  { id: 'maillot_floque_pre_match_enfant_2627', name: 'Maillot Floqué Pré-Match Enfant 26/27', category: 'Floqué',
+    variants: priced(['5/6 ans', '7/8 ans', '9/10 ans', '11/12 ans', '13/14 ans'], 'maillot_enfant', 63, 52.5) },
+  // --- Textile ---
+  { id: 't_shirt_adulte_navy', name: 'T-shirt Adulte Navy', category: 'Textile',
+    variants: priced(['S', 'M', 'L', 'XL'], 'adulte', 15, 12.5) },
+  { id: 't_shirt_junior_navy', name: 'T-shirt Junior Navy', category: 'Textile',
+    variants: priced(['4/6 ans', '6/8 ans', '8/10 ans', '10/12 ans', '12/14 ans'], 'textile_enfant', 15, 12.5) },
+  { id: 't_shirt_tremblay_adulte_gris_et_blanc_adidas', name: 'T-shirt TREMBLAY Adulte Gris et Blanc Adidas', category: 'Textile',
+    variants: priced(['S', 'L', 'XL'], 'adulte', 25, 20.83) },
+  { id: 'hoody_navy_adulte', name: 'Hoody Navy Adulte', category: 'Textile',
+    variants: priced(['S', 'M', 'L', 'XL'], 'adulte', 45, 37.5) },
+  { id: 'hoody_navy_junior', name: 'Hoody Navy Junior', category: 'Textile',
+    variants: priced(['4/6 ans', '6/8 ans', '8/10 ans', '10/12 ans', '12/14 ans'], 'textile_enfant', 40, 33.33) },
+  { id: 'hoody_adulte_noir_adidas', name: 'Hoody Adulte Noir Adidas', category: 'Textile',
+    variants: priced(['S', 'M', 'L', 'XL'], 'adulte', 45, 37.5) },
 ];
 
-export const CATEGORIES = ['Maillot', 'Textile', 'Accessoire', '25/26'];
-// libellés d'onglets (sans « s » automatique pour « 25/26 »)
-export const CATEGORY_LABELS = { Maillot: 'Maillots', Textile: 'Textiles', Accessoire: 'Accessoires', '25/26': '25/26' };
+export const CATEGORIES = ['Maillot', 'Floqué', 'Textile'];
+export const CATEGORY_LABELS = { Maillot: 'Maillots', Floqué: 'Floqués', Textile: 'Textiles' };
 
-// Matchs 26-27 (feuilles du fichier « en préparation »)
+// Matchs à domicile 26-27 — Daikin StarLigue, calendrier LNH (scrapé le 16/09/2026).
+// Horaires encore « provisoires » à partir de J10.
 export const SEED_MATCHES = [
-  { code: 'J01', label: 'Nantes' }, { code: 'J03', label: 'St-Raphaël' },
-  { code: 'J05', label: 'Sélestat' }, { code: 'J06', label: 'Montpellier' },
-  { code: 'J08', label: 'Cesson' }, { code: 'J10', label: 'Caen' },
-  { code: 'J12', label: 'Toulouse' }, { code: 'J15', label: 'Aix' },
-  { code: 'J17', label: 'Nîmes' }, { code: 'J19', label: 'Chartres' },
-  { code: 'J21', label: 'Paris' }, { code: 'J24', label: 'Saran' },
-  { code: 'J26', label: 'Chambéry' }, { code: 'J28', label: 'Limoges' },
-  { code: 'J30', label: 'Dunkerque' },
+  { code: 'J01', label: 'Nantes', date: '2026-09-05', logo: '/assets/clubs/nantes.png' },
+  { code: 'J03', label: 'Saint-Raphaël', date: '2026-09-18', logo: '/assets/clubs/saint-raphael.png' },
+  { code: 'J05', label: 'Sélestat', date: '2026-10-02', logo: '/assets/clubs/selestat.png' },
+  { code: 'J06', label: 'Montpellier', date: '2026-10-11', logo: '/assets/clubs/montpellier.png' },
+  { code: 'J08', label: 'Cesson-Rennes', date: '2026-10-23', logo: '/assets/clubs/cesson-rennes.png' },
+  { code: 'J10', label: 'Caen', date: '2026-11-13', logo: '/assets/clubs/caen.png' },
+  { code: 'J12', label: 'Toulouse', date: '2026-11-27', logo: '/assets/clubs/toulouse.png' },
+  { code: 'J15', label: 'Aix', date: '2026-12-22', logo: '/assets/clubs/aix.png' },
+  { code: 'J17', label: 'Nîmes', date: '2027-02-12', logo: '/assets/clubs/nimes.png' },
+  { code: 'J19', label: 'Chartres', date: '2027-02-26', logo: '/assets/clubs/chartres.png' },
+  { code: 'J21', label: 'Paris', date: '2027-03-19', logo: '/assets/clubs/paris.png' },
+  { code: 'J24', label: 'Saran', date: '2027-04-09', logo: '/assets/clubs/saran.png' },
+  { code: 'J26', label: 'Chambéry', date: '2027-04-16', logo: '/assets/clubs/chambery.png' },
+  { code: 'J28', label: 'Limoges', date: '2027-04-30', logo: '/assets/clubs/limoges.png' },
+  { code: 'J30', label: 'Dunkerque', date: '2027-05-19', logo: '/assets/clubs/dunkerque.png' },
 ];
+
+export function formatMatchDate(iso) {
+  if (!iso) return '';
+  const d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+}
 
 export const sku = (productId, size) => `${productId}|${size}`;

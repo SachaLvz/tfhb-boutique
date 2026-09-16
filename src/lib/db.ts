@@ -78,15 +78,44 @@ async function putMany(store, items) {
 
 /** Remplace entièrement un object store (source de vérité distante). */
 export async function replaceStore(store, items) {
+  return replaceStores({ [store]: items });
+}
+
+/** Remplace plusieurs stores dans une seule transaction IndexedDB. */
+export async function replaceStores(map) {
+  const names = Object.keys(map);
+  if (!names.length) return;
   const d = await db();
   await new Promise((resolve, reject) => {
-    const t = d.transaction(store, 'readwrite');
-    const os = t.objectStore(store);
-    os.clear();
-    (items || []).forEach((it) => os.put(it));
+    const t = d.transaction(names, 'readwrite');
+    for (const store of names) {
+      const os = t.objectStore(store);
+      os.clear();
+      (map[store] || []).forEach((it) => os.put(it));
+    }
     t.oncomplete = resolve;
     t.onerror = () => reject(t.error);
   });
+}
+
+export async function kvSetMany(entries) {
+  if (!entries.length) return;
+  const d = await db();
+  await new Promise((resolve, reject) => {
+    const t = d.transaction('kv', 'readwrite');
+    const os = t.objectStore('kv');
+    for (const [key, value] of entries) os.put(value, key);
+    t.oncomplete = resolve;
+    t.onerror = () => reject(t.error);
+  });
+}
+
+export async function hasLocalCache() {
+  const [seeded, last] = await Promise.all([
+    kvGet('seeded', false),
+    kvGet('last_sync', null),
+  ]);
+  return !!(seeded || last);
 }
 
 const now = () => new Date().toISOString();
@@ -105,18 +134,16 @@ export async function ensureSeeded() {
   const products = SEED_CATALOG.map((p) => ({ ...p, updated_at: now() }));
   await putMany('products', products);
 
-  // Stock de démonstration (à remplacer par l'import Excel réel — Lot 2).
   const stock = [];
   for (const p of SEED_CATALOG) {
     for (const v of p.variants) {
-      const demo = v.size === 'TU' ? 20 : (2 + ((p.name.length + v.size.length) % 6));
-      stock.push({ sku: sku(p.id, v.size), physique: demo, reserve: demo, en_ligne: 0, archive: 0, updated_at: now() });
+      stock.push({ sku: sku(p.id, v.size), physique: 0, reserve: 0, en_ligne: 0, archive: 0, updated_at: now() });
     }
   }
   await putMany('stock', stock);
 
   const matches = SEED_MATCHES.map((m) => ({
-    id: uid(), code: m.code, label: m.label, date: null, channel: 'physique', updated_at: now(),
+    id: uid(), code: m.code, label: m.label, date: m.date || null, logo: m.logo || null, channel: 'physique', updated_at: now(),
   }));
   // Canal "Boutique en ligne" toujours disponible
   matches.push({ id: uid(), code: 'WEB', label: 'Boutique en ligne', date: null, channel: 'en_ligne', updated_at: now() });
@@ -220,12 +247,57 @@ export async function adjustStock(skuId, location, delta) {
   return rec;
 }
 
-// Retire les produits abandonnés (soft-delete) — marche sur install existante.
-const DEPRECATED_PRODUCTS = ['peluche'];
+// Remplace l'ancien catalogue par la boutique officielle WePlay (install déjà seedée).
 export async function ensureRemovedProducts() {
-  for (const id of DEPRECATED_PRODUCTS) {
-    const p = await getOne('products', id);
-    if (p && !p.deleted) await deleteProduct(id);
+  return ensureCatalog();
+}
+
+export async function ensureCatalog() {
+  const existing = await getAll('products');
+  const seedIds = new Set(SEED_CATALOG.map((p) => p.id));
+  const byId = new Map(existing.map((p) => [p.id, p]));
+  const toPut = [];
+
+  for (const p of SEED_CATALOG) {
+    const cur = byId.get(p.id);
+    if (!cur) {
+      toPut.push({ ...p, updated_at: now() });
+      continue;
+    }
+    if (cur.deleted) {
+      toPut.push({ ...cur, ...p, deleted: false, updated_at: now() });
+    }
+  }
+  if (toPut.length) {
+    await putMany('products', toPut);
+    for (const rec of toPut) await logChange('product', rec);
+  }
+
+  for (const p of existing) {
+    if (!p.deleted && !seedIds.has(p.id)) await deleteProduct(p.id);
+  }
+
+  const stockRows = await getAll('stock');
+  const stockBySku = new Map(stockRows.map((s) => [s.sku, s]));
+  const stockPut = [];
+  for (const p of SEED_CATALOG) {
+    for (const v of p.variants) {
+      const id = sku(p.id, v.size);
+      const cur = stockBySku.get(id);
+      if (!cur) {
+        stockPut.push({ sku: id, physique: 0, reserve: 0, en_ligne: 0, archive: 0, updated_at: now() });
+      } else if (cur.deleted) {
+        stockPut.push({ ...cur, deleted: false, updated_at: now() });
+      }
+    }
+  }
+  if (stockPut.length) await putMany('stock', stockPut);
+
+  const cats = await kvGet('categories', []);
+  const want = CATEGORIES.slice();
+  if (JSON.stringify(cats) !== JSON.stringify(want)) {
+    await kvSet('categories', want);
+    touch();
   }
 }
 
@@ -259,14 +331,45 @@ export async function setMatchLogo(id, dataUrl) {
 // fonctionne aussi sur une install déjà initialisée.
 export async function ensureMatches() {
   const existing = await getAll('matches');
-  const codes = new Set(existing.map((m) => m.code));
-  const want = [
-    { code: 'J-0', label: 'Guiscard', channel: 'physique' },
-    { code: 'SAL', label: 'Salariés', channel: 'salarie' },
+  const byCode = new Map(existing.map((m) => [m.code, m]));
+  const extras = [
+    { code: 'J-0', label: 'Guiscard', date: null, channel: 'physique' },
+    { code: 'SAL', label: 'Salariés', date: null, channel: 'salarie' },
+    { code: 'WEB', label: 'Boutique en ligne', date: null, channel: 'en_ligne' },
   ];
-  const toAdd = want.filter((w) => !codes.has(w.code))
-    .map((w) => ({ id: uid(), date: null, updated_at: now(), ...w }));
-  if (toAdd.length) await putMany('matches', toAdd);
+  const want = [
+    ...SEED_MATCHES.map((m) => ({ code: m.code, label: m.label, date: m.date || null, logo: m.logo || null, channel: 'physique' })),
+    ...extras,
+  ];
+  const homeCodes = new Set(SEED_MATCHES.map((m) => m.code));
+  const toPut = [];
+  for (const w of want) {
+    const cur = byCode.get(w.code);
+    if (!cur) {
+      toPut.push({ id: uid(), updated_at: now(), ...w });
+      continue;
+    }
+    const isHome = homeCodes.has(w.code);
+    if (cur.deleted && !isHome) continue;
+    const nextDate = w.date || cur.date || null;
+    const nextLabel = w.label || cur.label;
+    const nextLogo = cur.logo || w.logo || null;
+    const revive = !!(cur.deleted && isHome);
+    if (revive || nextDate !== (cur.date || null) || nextLabel !== cur.label || nextLogo !== (cur.logo || null)) {
+      toPut.push({
+        ...cur,
+        deleted: false,
+        label: nextLabel,
+        date: nextDate,
+        logo: nextLogo,
+        channel: w.channel || cur.channel || 'physique',
+        updated_at: now(),
+      });
+    }
+  }
+  if (!toPut.length) return;
+  await putMany('matches', toPut);
+  for (const rec of toPut) await logChange('match', rec);
 }
 
 // --- ventes ---
@@ -516,9 +619,10 @@ export async function setVentesInternes(amount) {
 
 // Toutes les lignes locales à pousser, par table.
 export async function getSyncBatch() {
-  const batch = {};
-  for (const [store] of SYNC_TABLES) batch[store] = await getAll(store);
-  return batch;
+  const entries = await Promise.all(
+    SYNC_TABLES.map(async ([store]) => [store, await getAll(store)]),
+  );
+  return Object.fromEntries(entries);
 }
 
 // Applique des lignes distantes en local ; renvoie le nombre d'écritures.

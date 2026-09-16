@@ -2,6 +2,7 @@
 // Écran Réglages (Lot 4) : configuration Supabase + synchronisation + saisons.
 import * as db from './db';
 import * as sync from './sync';
+import { formatMatchDate } from './catalog';
 
 let ctx = { toast: () => {} };
 let pendingLogoMatch = null;
@@ -82,7 +83,7 @@ export async function renderReglages(host, context) {
       <p class="muted">Ajoute ou supprime les journées et canaux qui apparaissent dans le sélecteur de match de la caisse.</p>
       <input type="file" id="matchLogoFile" accept="image/*" hidden>
       <div class="bo-tablewrap"><table class="bo-table">
-        <thead><tr><th>Logo</th><th>Code</th><th>Nom</th><th>Type</th><th></th></tr></thead>
+        <thead><tr><th>Logo</th><th>Code</th><th>Nom</th><th>Date</th><th>Type</th><th></th></tr></thead>
         <tbody id="matchRows"></tbody>
       </table></div>
       <div class="reg-actions">
@@ -162,12 +163,14 @@ export async function renderReglages(host, context) {
   // --- Matchs ---
   host.querySelector('#matchRows').innerHTML = matches.map((m) => `<tr>
     <td>${m.logo ? `<img class="match-logo" src="${m.logo}" alt="">` : '<span class="match-logo empty"></span>'}</td>
-    <td><b>${m.code || '—'}</b></td><td>${m.label || '—'}</td><td>${CHAN[m.channel] || 'Soir de match'}</td>
+    <td><b>${m.code || '—'}</b></td><td>${m.label || '—'}</td>
+    <td>${formatMatchDate(m.date) || '—'}</td>
+    <td>${CHAN[m.channel] || 'Soir de match'}</td>
     <td class="match-acts">
       <button class="bo-btn mini" data-logo="${m.id}">${m.logo ? 'Changer' : '＋ Logo'}</button>
       ${m.logo ? `<button class="bo-btn mini" data-logodel="${m.id}">Retirer</button>` : ''}
       <button class="bo-x" data-delmatch="${m.id}">🗑</button></td></tr>`).join('')
-    || '<tr><td colspan="5" class="muted">Aucun match</td></tr>';
+    || '<tr><td colspan="6" class="muted">Aucun match</td></tr>';
   host.querySelectorAll('[data-delmatch]').forEach((b) => b.addEventListener('click', async () => {
     await db.deleteMatch(b.dataset.delmatch); ctx.toast('Match supprimé'); ctx.onChanged && ctx.onChanged(); renderReglages(host, ctx);
   }));

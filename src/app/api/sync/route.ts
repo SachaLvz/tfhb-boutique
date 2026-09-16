@@ -41,10 +41,18 @@ async function upsert(c: SupabaseClient, table: string, rows: unknown[], onConfl
   return rows.length;
 }
 
-async function fetchAll(c: SupabaseClient, table: string, select = "*") {
-  const { data, error } = await c.from(table).select(select);
-  if (error) throw new Error(`pull ${table} : ${error.message}`);
-  return data || [];
+async function fetchAll(c: SupabaseClient, table: string, select = "*", pageSize = 1000) {
+  const out: unknown[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await c.from(table).select(select).range(from, from + pageSize - 1);
+    if (error) throw new Error(`pull ${table} : ${error.message}`);
+    const rows = data || [];
+    out.push(...rows);
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+  return out;
 }
 
 // ---------- mapping local ↔ remote ----------
@@ -415,33 +423,62 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "pull") {
-      const remoteSeasons = (await fetchAll(c, "seasons")).map(fromSeason);
+      const photosOnly = !!body.photosOnly;
+      const omitPhotos = !!body.omitPhotos || photosOnly;
 
-      const remoteProducts = await fetchAll(c, "products");
-      const remoteVariants = await fetchAll(c, "product_variants");
-      const variantsByProduct = groupBy(remoteVariants, "product_id");
-      const products = remoteProducts.map((p: any) => fromProduct(p, variantsByProduct[p.id] || []));
+      if (photosOnly) {
+        const remotePhotos = await fetchAll(c, "photos", "*", 50);
+        return NextResponse.json({ photos: remotePhotos.map(fromPhoto) });
+      }
 
-      const stock = (await fetchAll(c, "stock")).map(fromStock);
-      const matches = (await fetchAll(c, "matches")).map(fromMatch);
+      const [
+        remoteSeasons,
+        remoteProducts,
+        remoteVariants,
+        remoteStock,
+        remoteMatches,
+        remoteSales,
+        remoteLines,
+        remoteInvoices,
+        remoteFinAdjust,
+        remoteMeta,
+        remotePhotos,
+      ] = await Promise.all([
+        fetchAll(c, "seasons"),
+        fetchAll(c, "products"),
+        fetchAll(c, "product_variants"),
+        fetchAll(c, "stock"),
+        fetchAll(c, "matches"),
+        fetchAll(c, "sales"),
+        fetchAll(c, "sale_lines"),
+        fetchAll(c, "invoices"),
+        fetchAll(c, "fin_adjust"),
+        fetchAll(c, "app_meta"),
+        omitPhotos ? Promise.resolve([]) : fetchAll(c, "photos", "*", 50),
+      ]);
 
-      const remoteSales = await fetchAll(c, "sales");
-      const remoteLines = await fetchAll(c, "sale_lines");
-      const linesBySale = groupBy(remoteLines, "sale_id");
-      const sales = remoteSales.map((s: any) => fromSale(s, linesBySale[s.id] || []));
+      const variantsByProduct = groupBy(remoteVariants as any[], "product_id");
+      const products = (remoteProducts as any[]).map((p: any) => fromProduct(p, variantsByProduct[p.id] || []));
+      const linesBySale = groupBy(remoteLines as any[], "sale_id");
+      const sales = (remoteSales as any[]).map((s: any) => fromSale(s, linesBySale[s.id] || []));
 
-      const invoices = (await fetchAll(c, "invoices")).map(fromInvoice);
-      const finAdjust = (await fetchAll(c, "fin_adjust")).map(fromFinAdjust);
-      const photos = (await fetchAll(c, "photos")).map(fromPhoto);
-
-      const remoteMeta = await fetchAll(c, "app_meta");
       const meta: Record<string, { value: unknown; updated_at: string }> = {};
       for (const m of remoteMeta as any[]) {
         if (m.key !== "active_season" && m.key !== "categories") continue;
         meta[m.key] = { value: m.value, updated_at: m.updated_at || now() };
       }
 
-      return NextResponse.json({ seasons: remoteSeasons, products, stock, matches, sales, invoices, finAdjust, photos, meta });
+      return NextResponse.json({
+        seasons: (remoteSeasons as any[]).map(fromSeason),
+        products,
+        stock: (remoteStock as any[]).map(fromStock),
+        matches: (remoteMatches as any[]).map(fromMatch),
+        sales,
+        invoices: (remoteInvoices as any[]).map(fromInvoice),
+        finAdjust: (remoteFinAdjust as any[]).map(fromFinAdjust),
+        photos: omitPhotos ? undefined : (remotePhotos as any[]).map(fromPhoto),
+        meta,
+      });
     }
 
     return NextResponse.json({ error: "Action inconnue" }, { status: 400 });
