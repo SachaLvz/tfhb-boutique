@@ -218,6 +218,10 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .mini{font-size:12px}
 .bo-kpis{display:flex;gap:16px;flex-wrap:wrap;margin-left:auto;font-size:14px}
 .bo-kpis b{color:var(--ink)}
+.move-badge{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;white-space:nowrap}
+.move-badge.move-in{color:#157347;background:#e6f6ed}
+.move-badge.move-out{color:#b42318;background:#fde8e6}
 .bo-kpis.big{margin:0 0 14px;gap:22px}
 .bo-kpis.big span{display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);
   border-radius:10px;padding:10px 16px;color:var(--ink-soft);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px}

@@ -44,7 +44,7 @@ export async function renderReglages(host, context) {
       <p class="muted">Les données dynamiques (catalogue, stock, ventes, matchs…) sont chargées depuis Supabase.
       IndexedDB sert de cache hors-ligne. Renseigne l'<b>URL</b> et la <b>clé anon</b> ici ou via <code>.env</code>.
       Avant la 1ʳᵉ synchro, exécute <code>supabase-schema.sql</code>
-      (tables <code>products</code>, <code>stock</code>, <code>sales</code>, <code>sale_lines</code>…).</p>
+      (tables <code>products</code>, <code>stock</code>, <code>sales</code>, <code>sale_lines</code>, <code>stock_moves</code>…).</p>
 
       <div class="reg-status">
         <span class="badge ${st.online ? 'ok' : 'off'}">${st.online ? 'En ligne' : 'Hors-ligne'}</span>

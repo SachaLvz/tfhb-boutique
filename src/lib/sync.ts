@@ -135,6 +135,13 @@ async function pullAllNow(opts = {}) {
   };
   if (!opts.omitPhotos && r.photos) stores.photos = r.photos;
   await db.replaceStores(stores);
+  if (Array.isArray(r.stock_moves)) {
+    try {
+      await db.applyRemoteRows('stock_moves', r.stock_moves);
+    } catch (e) {
+      console.warn('[sync] stock_moves', e);
+    }
+  }
 
   let pulled = Object.values(stores).reduce((n, rows) => n + (rows?.length || 0), 0);
   const kvEntries = [['seeded', true], ['last_sync', db.now()]];

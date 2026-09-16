@@ -7,13 +7,23 @@
 import { SEED_CATALOG, SEED_MATCHES, CATEGORIES, sku } from './catalog';
 
 const DB_NAME = 'tfhb-boutique';
-const DB_VERSION = 5;
-const STORES = ['kv', 'products', 'stock', 'matches', 'sales', 'invoices', 'seasons', 'fin_adjust', 'photos', 'tombstones', 'outbox'];
+const DB_VERSION = 6;
+const STORES = ['kv', 'products', 'stock', 'matches', 'sales', 'invoices', 'seasons', 'fin_adjust', 'photos', 'stock_moves', 'tombstones', 'outbox'];
 // tables répliquées vers Supabase (Lot 4) : [store, clé primaire]
 export const SYNC_TABLES = [
   ['products', 'id'], ['stock', 'sku'], ['matches', 'id'],
   ['sales', 'id'], ['invoices', 'id'], ['seasons', 'id'], ['fin_adjust', 'id'], ['photos', 'id'],
+  ['stock_moves', 'id'],
 ];
+
+export const STOCK_MOVE_REASONS = {
+  vente: 'Vente',
+  remboursement: 'Remboursement',
+  reassort: 'Réassort / entrée',
+  ajustement: 'Ajustement',
+  transfert: 'Transfert',
+  vidage: 'Vidage stock',
+};
 
 let _db = null;
 
@@ -34,6 +44,12 @@ function open() {
       if (!db.objectStoreNames.contains('seasons')) db.createObjectStore('seasons', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('fin_adjust')) db.createObjectStore('fin_adjust', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('stock_moves')) {
+        const m = db.createObjectStore('stock_moves', { keyPath: 'id' });
+        m.createIndex('by_sku', 'sku');
+        m.createIndex('by_product', 'product_id');
+        m.createIndex('by_season', 'season_id');
+      }
       if (!db.objectStoreNames.contains('tombstones')) db.createObjectStore('tombstones', { keyPath: 'key' });
       if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'seq', autoIncrement: true });
     };
@@ -247,6 +263,85 @@ export async function adjustStock(skuId, location, delta) {
   return rec;
 }
 
+function splitSku(skuId) {
+  const s = String(skuId || '');
+  const i = s.indexOf('|');
+  if (i < 0) return { product_id: s, size: '' };
+  return { product_id: s.slice(0, i), size: s.slice(i + 1) };
+}
+
+async function skuMeta(skuId) {
+  const { product_id, size } = splitSku(skuId);
+  const p = product_id ? await getOne('products', product_id) : null;
+  return {
+    product_id,
+    size,
+    product_name: p?.name || product_id || skuId,
+    category: p?.category || '',
+  };
+}
+
+/** Journal d'entrées / sorties (vente, remboursement, réassort, ajustement…). */
+export async function recordStockMoves(entries) {
+  if (!entries?.length) return [];
+  const season_id = await kvGet('active_season', null);
+  const recs = [];
+  for (const e of entries) {
+    const qty = Math.abs(Math.round(e.qty || 0));
+    if (!qty) continue;
+    const meta = await skuMeta(e.sku);
+    recs.push({
+      id: uid(),
+      sku: e.sku,
+      product_id: e.product_id || meta.product_id,
+      product_name: e.product_name || meta.product_name,
+      size: e.size || meta.size,
+      category: e.category || meta.category || '',
+      direction: e.direction === 'in' ? 'in' : 'out',
+      reason: e.reason || 'ajustement',
+      qty,
+      location: e.location || 'physique',
+      location_to: e.location_to || null,
+      sale_id: e.sale_id || null,
+      match_id: e.match_id || null,
+      match_label: e.match_label || '',
+      note: e.note || '',
+      season_id,
+      deleted: false,
+      created_at: now(),
+      updated_at: now(),
+    });
+  }
+  if (!recs.length) return [];
+  await putMany('stock_moves', recs);
+  for (const rec of recs) await logChange('stock_move', rec);
+  return recs;
+}
+
+export async function listStockMoves({ seasonId, sku: skuId, productId, direction, reason } = {}) {
+  let all = [];
+  try {
+    all = (await getAll('stock_moves')).filter((m) => !m.deleted);
+  } catch (_) {
+    return [];
+  }
+  if (seasonId) all = all.filter((m) => !m.season_id || m.season_id === seasonId);
+  if (skuId) all = all.filter((m) => m.sku === skuId);
+  if (productId) all = all.filter((m) => m.product_id === productId);
+  if (direction) all = all.filter((m) => m.direction === direction);
+  if (reason) all = all.filter((m) => m.reason === reason);
+  return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+}
+
+/** Applique un mouvement manuel (entrée ou sortie) et met à jour le stock. */
+export async function applyStockMove({ sku: skuId, direction, qty, location = 'physique', reason = 'reassort', note = '' }) {
+  const n = Math.round(+qty || 0);
+  if (n <= 0) throw new Error('Quantité invalide');
+  const dir = direction === 'out' ? 'out' : 'in';
+  await adjustStock(skuId, location, dir === 'out' ? -n : n);
+  return recordStockMoves([{ sku: skuId, direction: dir, qty: n, location, reason, note }]);
+}
+
 // Remplace l'ancien catalogue par la boutique officielle WePlay (install déjà seedée).
 export async function ensureRemovedProducts() {
   return ensureCatalog();
@@ -380,6 +475,18 @@ export async function recordSale(sale) {
   // décrément du stock (emplacement selon canal)
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
   for (const l of sale.lines) await adjustStock(l.sku, loc, -l.qty);
+  await recordStockMoves((sale.lines || []).map((l) => ({
+    sku: l.sku,
+    product_name: l.name,
+    size: l.size,
+    direction: 'out',
+    reason: 'vente',
+    qty: l.qty,
+    location: loc,
+    sale_id: rec.id,
+    match_id: sale.matchId || null,
+    match_label: sale.matchLabel || '',
+  })));
   touch();
   return rec;
 }
@@ -427,13 +534,25 @@ export async function deleteProduct(productId) {
 }
 
 // --- stock : réglage direct, entrée/réassort, transfert ---
-export async function setStockValue(skuId, location, value) {
+export async function setStockValue(skuId, location, value, meta = {}) {
   const os = await tx('stock', 'readwrite');
   const rec = (await done(os.get(skuId))) || { sku: skuId, physique: 0, reserve: 0, en_ligne: 0, archive: 0 };
+  const prev = rec[location] || 0;
   rec[location] = Math.max(0, Math.round(value));
   rec.updated_at = now();
   await done(os.put(rec));
   await logChange('stock', rec);
+  const delta = rec[location] - prev;
+  if (delta) {
+    await recordStockMoves([{
+      sku: skuId,
+      direction: delta > 0 ? 'in' : 'out',
+      reason: meta.reason || (delta > 0 ? 'reassort' : 'ajustement'),
+      qty: Math.abs(delta),
+      location,
+      note: meta.note || '',
+    }]);
+  }
   return rec;
 }
 
@@ -441,6 +560,7 @@ export async function setStockValue(skuId, location, value) {
 export async function clearAllStock() {
   const all = await getAll('stock');
   const updated = [];
+  const moves = [];
   let cleared = 0;
   for (const s of all) {
     if (s.deleted) continue;
@@ -458,11 +578,18 @@ export async function clearAllStock() {
     };
     updated.push(rec);
     if (before > 0) cleared++;
+    for (const loc of ['physique', 'en_ligne', 'reserve', 'archive', 'salarie']) {
+      const q = s[loc] || 0;
+      if (q > 0) {
+        moves.push({ sku: s.sku, direction: 'out', qty: q, location: loc, reason: 'vidage' });
+      }
+    }
   }
   if (updated.length) {
     await putMany('stock', updated);
     for (const rec of updated) await logChange('stock', rec);
   }
+  if (moves.length) await recordStockMoves(moves);
   return cleared;
 }
 export async function transferStock(skuId, from, to, qty) {
@@ -474,6 +601,12 @@ export async function transferStock(skuId, from, to, qty) {
   rec.updated_at = now();
   await done(os.put(rec));
   await logChange('stock', rec);
+  if (move > 0) {
+    await recordStockMoves([
+      { sku: skuId, direction: 'out', qty: move, location: from, location_to: to, reason: 'transfert' },
+      { sku: skuId, direction: 'in', qty: move, location: to, reason: 'transfert', note: `depuis ${from}` },
+    ]);
+  }
   return rec;
 }
 
@@ -504,6 +637,19 @@ export async function voidSale(saleId) {
   if (!sale || sale.deleted) return;
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
   for (const l of sale.lines) await adjustStock(l.sku, loc, +l.qty);
+  await recordStockMoves((sale.lines || []).map((l) => ({
+    sku: l.sku,
+    product_name: l.name,
+    size: l.size,
+    direction: 'in',
+    reason: 'remboursement',
+    qty: l.qty,
+    location: loc,
+    sale_id: sale.id,
+    match_id: sale.matchId || null,
+    match_label: sale.matchLabel || '',
+    note: 'Annulation de vente',
+  })));
   sale.deleted = true; sale.updated_at = now();
   await putMany('sales', [sale]);
   await logChange('sale', sale);
@@ -523,6 +669,7 @@ export async function exportState() {
     matches: await getAll('matches'),
     sales: await getAll('sales'),
     invoices: await getAll('invoices'),
+    stock_moves: await getAll('stock_moves'),
   };
 }
 // Remplace catalogue + stock (import depuis un classeur édité hors-ligne).

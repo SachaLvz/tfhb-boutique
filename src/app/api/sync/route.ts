@@ -55,6 +55,20 @@ async function fetchAll(c: SupabaseClient, table: string, select = "*", pageSize
   return out;
 }
 
+function isMissingTable(err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /does not exist|schema cache|Could not find the table/i.test(msg);
+}
+
+async function fetchAllOptional(c: SupabaseClient, table: string, select = "*", pageSize = 1000) {
+  try {
+    return await fetchAll(c, table, select, pageSize);
+  } catch (e) {
+    if (isMissingTable(e)) return null;
+    throw e;
+  }
+}
+
 // ---------- mapping local ↔ remote ----------
 
 function splitSku(sku: string) {
@@ -191,6 +205,31 @@ function mapFinAdjust(a: any) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapStockMove(m: any) {
+  return {
+    id: m.id,
+    sku: m.sku,
+    product_id: m.product_id || null,
+    product_name: m.product_name || null,
+    size: m.size || null,
+    category: m.category || null,
+    direction: m.direction === "in" ? "in" : "out",
+    reason: m.reason || "ajustement",
+    qty: m.qty || 0,
+    location: m.location || "physique",
+    location_to: m.location_to || null,
+    sale_id: m.sale_id || null,
+    match_id: m.match_id || null,
+    match_label: m.match_label || null,
+    note: m.note || null,
+    season_id: m.season_id || null,
+    deleted: !!m.deleted,
+    created_at: m.created_at || m.updated_at || now(),
+    updated_at: m.updated_at || now(),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapPhoto(p: any) {
   return {
     id: p.id,
@@ -315,6 +354,31 @@ function fromFinAdjust(r: any) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function fromStockMove(r: any) {
+  return {
+    id: r.id,
+    sku: r.sku,
+    product_id: r.product_id || "",
+    product_name: r.product_name || "",
+    size: r.size || "",
+    category: r.category || "",
+    direction: r.direction === "in" ? "in" : "out",
+    reason: r.reason || "ajustement",
+    qty: Number(r.qty) || 0,
+    location: r.location || "physique",
+    location_to: r.location_to || null,
+    sale_id: r.sale_id || null,
+    match_id: r.match_id || null,
+    match_label: r.match_label || "",
+    note: r.note || "",
+    season_id: r.season_id || null,
+    deleted: !!r.deleted,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function fromPhoto(r: any) {
   return {
     id: r.id,
@@ -412,6 +476,11 @@ export async function POST(req: NextRequest) {
       pushed += await upsert(c, "invoices", (batch.invoices || []).map(mapInvoice));
       pushed += await upsert(c, "fin_adjust", (batch.fin_adjust || []).map(mapFinAdjust));
       pushed += await upsert(c, "photos", (batch.photos || []).map(mapPhoto));
+      try {
+        pushed += await upsert(c, "stock_moves", (batch.stock_moves || []).map(mapStockMove));
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+      }
 
       const metaRows = [
         { key: "active_season", value: meta.active_season ?? null, updated_at: now() },
@@ -443,6 +512,7 @@ export async function POST(req: NextRequest) {
         remoteFinAdjust,
         remoteMeta,
         remotePhotos,
+        remoteMoves,
       ] = await Promise.all([
         fetchAll(c, "seasons"),
         fetchAll(c, "products"),
@@ -455,6 +525,7 @@ export async function POST(req: NextRequest) {
         fetchAll(c, "fin_adjust"),
         fetchAll(c, "app_meta"),
         omitPhotos ? Promise.resolve([]) : fetchAll(c, "photos", "*", 50),
+        fetchAllOptional(c, "stock_moves"),
       ]);
 
       const variantsByProduct = groupBy(remoteVariants as any[], "product_id");
@@ -477,6 +548,7 @@ export async function POST(req: NextRequest) {
         invoices: (remoteInvoices as any[]).map(fromInvoice),
         finAdjust: (remoteFinAdjust as any[]).map(fromFinAdjust),
         photos: omitPhotos ? undefined : (remotePhotos as any[]).map(fromPhoto),
+        stock_moves: remoteMoves ? (remoteMoves as any[]).map(fromStockMove) : undefined,
         meta,
       });
     }

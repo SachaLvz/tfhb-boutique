@@ -8,6 +8,7 @@
 -- ============================================================
 
 drop table if exists public.photos cascade;
+drop table if exists public.stock_moves cascade;
 drop table if exists public.fin_adjust cascade;
 drop table if exists public.invoices cascade;
 drop table if exists public.sale_lines cascade;
@@ -180,6 +181,36 @@ create table public.app_meta (
 );
 
 -- ------------------------------------------------------------
+--  Journal d'entrées / sorties (maillots & stock)
+-- ------------------------------------------------------------
+create table public.stock_moves (
+  id            text primary key,
+  sku           text not null,
+  product_id    text,
+  product_name  text,
+  size          text,
+  category      text,
+  direction     text not null check (direction in ('in', 'out')),
+  reason        text not null,
+  qty           integer not null check (qty > 0),
+  location      text not null default 'physique',
+  location_to   text,
+  sale_id       text,
+  match_id      text,
+  match_label   text,
+  note          text,
+  season_id     text,
+  deleted       boolean not null default false,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index stock_moves_sku_idx on public.stock_moves(sku);
+create index stock_moves_product_idx on public.stock_moves(product_id);
+create index stock_moves_season_idx on public.stock_moves(season_id);
+create index stock_moves_created_idx on public.stock_moves(created_at desc);
+
+-- ------------------------------------------------------------
 --  Sécurité (RLS) — clé anon partagée entre les postes du club
 --  ⚠️ Ne diffuse pas URL + clé anon hors du club.
 -- ------------------------------------------------------------
@@ -188,7 +219,7 @@ declare t text;
 begin
   foreach t in array array[
     'seasons','products','product_variants','stock','matches',
-    'sales','sale_lines','invoices','fin_adjust','photos','app_meta'
+    'sales','sale_lines','invoices','fin_adjust','photos','app_meta','stock_moves'
   ] loop
     execute format('alter table public.%I enable row level security;', t);
     execute format('drop policy if exists tfhb_all on public.%I;', t);
