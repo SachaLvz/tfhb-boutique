@@ -198,6 +198,36 @@ export async function removeCategory(name) {
   await kvSet('categories', list);
   await touch();
 }
+export async function renameCategory(from, to) {
+  from = (from || '').trim();
+  to = (to || '').trim();
+  if (!from) throw new Error('Nom actuel requis');
+  if (!to) throw new Error('Nouveau nom requis');
+  if (from === to) return to;
+  const list = ((await kvGet('categories', null)) || CATEGORIES.slice()).slice();
+  const next = [];
+  const seen = new Set();
+  for (const c of list) {
+    const name = c === from ? to : c;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    next.push(name);
+  }
+  if (!seen.has(to)) next.push(to);
+  await kvSet('categories', next);
+  const products = await getAll('products');
+  const changed = [];
+  for (const p of products) {
+    if (p.category === from) {
+      p.category = to;
+      p.updated_at = now();
+      changed.push(p);
+    }
+  }
+  if (changed.length) await putMany('products', changed);
+  await touch();
+  return to;
+}
 
 // ===================== PHOTOS D'ARTICLES (importées par l'utilisateur) =====================
 export async function savePhoto(productId, dataUrl) {

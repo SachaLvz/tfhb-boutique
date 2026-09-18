@@ -209,6 +209,7 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .bo-table td.num,.bo-table th.num{text-align:right;font-variant-numeric:tabular-nums}
 .bo-table tr.prow td{background:color-mix(in srgb,var(--blue) 6%,transparent);border-top:1px solid var(--line)}
 .cat-badge{font-size:11px;font-weight:700;color:var(--ink-soft);background:var(--line-soft);padding:2px 7px;border-radius:6px}
+select.cat-badge-sel{border:1px solid var(--line);cursor:pointer;max-width:140px}
 .bo-cell{width:88px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:7px;
   padding:6px 8px;font-size:13px;font-family:inherit}
 .bo-cell.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -367,6 +368,11 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .cat-chip{display:inline-flex;align-items:center;gap:7px;background:var(--line-soft);border:1px solid var(--line);
   border-radius:999px;padding:6px 13px;font-weight:700;font-size:13px}
 .cat-chip button{border:none;background:transparent;color:var(--red);font-weight:900;cursor:pointer;font-size:15px;line-height:1;padding:0}
+.cat-chip button.cat-ren{color:var(--ink-soft);font-size:13px;font-weight:700}
+.cat-chip-input{width:120px;max-width:28vw;padding:2px 6px;font-weight:700;font-size:13px}
+.cat-edit-list{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:8px}
+.cat-edit-row{display:flex;gap:8px;align-items:center}
+.cat-edit-row .bo-input{flex:1}
 
 /* Logos des équipes (par match) */
 .match-logo{width:26px;height:26px;object-fit:contain;border-radius:5px;vertical-align:middle;background:transparent}

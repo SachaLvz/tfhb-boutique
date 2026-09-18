@@ -96,7 +96,7 @@ export async function renderReglages(host, context) {
 
     <section class="reg-card">
       <h3>Catégories d'articles</h3>
-      <p class="muted">Les onglets de la caisse (Maillots, Textiles…). Ajoute une catégorie ; on ne peut supprimer qu'une catégorie sans article.</p>
+      <p class="muted">Onglets de la caisse. Tu peux ajouter, <b>renommer</b> (les articles suivent) ou supprimer une catégorie vide.</p>
       <div class="cat-chips" id="catChips"></div>
       <div class="reg-actions">
         <input id="newCat" class="bo-input" placeholder="Nouvelle catégorie (ex : Goodies)">
@@ -200,12 +200,52 @@ export async function renderReglages(host, context) {
 
   // --- Catégories ---
   host.querySelector('#catChips').innerHTML = categories.map((c) =>
-    `<span class="cat-chip">${c}<button data-delcat="${encodeURIComponent(c)}" title="Supprimer">×</button></span>`).join('');
+    `<span class="cat-chip" data-chip="${encodeURIComponent(c)}">
+      <span class="cat-chip-label">${c}</span>
+      <button type="button" class="cat-ren" data-rencat="${encodeURIComponent(c)}" title="Renommer">✎</button>
+      <button type="button" data-delcat="${encodeURIComponent(c)}" title="Supprimer">×</button>
+    </span>`).join('');
   host.querySelectorAll('[data-delcat]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await db.removeCategory(decodeURIComponent(b.dataset.delcat));
       ctx.toast('Catégorie supprimée'); ctx.onChanged && ctx.onChanged(); renderReglages(host, ctx);
     } catch (e) { ctx.toast(e.message); }
+  }));
+  host.querySelectorAll('[data-rencat]').forEach((b) => b.addEventListener('click', () => {
+    const old = decodeURIComponent(b.dataset.rencat);
+    const chip = b.closest('.cat-chip');
+    const label = chip.querySelector('.cat-chip-label');
+    if (chip.querySelector('input')) return;
+    const input = document.createElement('input');
+    input.className = 'bo-input cat-chip-input';
+    input.value = old;
+    label.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const next = input.value.trim();
+      if (!save || !next || next === old) {
+        renderReglages(host, ctx);
+        return;
+      }
+      try {
+        await db.renameCategory(old, next);
+        ctx.toast('Catégorie « ' + next + ' »');
+        ctx.onChanged && ctx.onChanged();
+        renderReglages(host, ctx);
+      } catch (e) {
+        ctx.toast(e.message);
+        renderReglages(host, ctx);
+      }
+    };
+    input.addEventListener('blur', () => void finish(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); void finish(false); }
+    });
   }));
   host.querySelector('#addCat').addEventListener('click', async () => {
     const name = host.querySelector('#newCat').value.trim();

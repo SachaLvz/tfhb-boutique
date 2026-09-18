@@ -109,6 +109,7 @@ function renderCatalogue(body) {
         <span id="internesTotal" class="internes-total">${eur(cache.internes || 0)}</span>
         <span class="muted mini">(= somme de la colonne « Vente salariés € », comptée dans les recettes)</span>
       </div>
+      <button id="editCats" class="bo-btn">Catégories</button>
       <button id="addProd" class="bo-btn primary">＋ Ajouter un article</button>
     </div>
     <input type="file" id="photoFile" accept="image/*" hidden>
@@ -117,6 +118,7 @@ function renderCatalogue(body) {
   fillTransferSkus(body);
   drawCatTable(body, '');
   body.querySelector('#boSearch').addEventListener('input', (e) => drawCatTable(body, e.target.value.toLowerCase()));
+  body.querySelector('#editCats').addEventListener('click', () => openCategoriesModal(body));
   body.querySelector('#addProd').addEventListener('click', () => openProductModal());
   body.querySelector('#photoFile').addEventListener('change', async (e) => {
     const file = e.target.files[0]; e.target.value = '';
@@ -157,7 +159,10 @@ function drawCatTable(body, filter) {
     const photo = cache.photos[p.id] || `/assets/produits/${p.id}.png`;
     rows.push(`<tr class="prow"><td colspan="5"><span class="prow-main">
         <img class="prow-thumb" src="${photo}" alt="" onerror="this.remove()">
-        <b>${p.name}</b> <span class="cat-badge">${p.category}</span>
+        <b>${p.name}</b>
+        <select class="cat-badge cat-badge-sel" data-setcat="${p.id}" title="Changer la catégorie">
+          ${cache.categories.map((c) => `<option value="${escHtml(c)}" ${c === p.category ? 'selected' : ''}>${escHtml(c)}</option>`).join('')}
+        </select>
         <button class="bo-btn mini" data-photo="${p.id}">📷 ${cache.photos[p.id] ? 'Changer la photo' : 'Ajouter une photo'}</button>
         ${cache.photos[p.id] ? `<button class="bo-btn mini" data-photodel="${p.id}">Retirer</button>` : ''}
         <button class="bo-btn mini" data-moves="${p.id}">Journal</button>
@@ -196,6 +201,15 @@ function drawCatTable(body, filter) {
     moveProductFilter = b.dataset.moves;
     sub = 'mouvements';
     paint();
+  }));
+  t.querySelectorAll('[data-setcat]').forEach((sel) => sel.addEventListener('change', async () => {
+    const p = cache.products.find((x) => x.id === sel.dataset.setcat);
+    if (!p || p.category === sel.value) return;
+    p.category = sel.value;
+    await db.saveProduct(p);
+    ctx.toast('Catégorie enregistrée');
+    if (ctx.refreshApp) await ctx.refreshApp();
+    ctx.onChanged && ctx.onChanged();
   }));
 }
 
@@ -302,6 +316,67 @@ function openProductModal() {
   });
 }
 const mkVar = (size, size_system, price, achat) => ({ size, size_system, sale_price: price, purchase_price_ht: achat, marking_cost: 0 });
+
+function openCategoriesModal(body) {
+  const paintList = (m) => {
+    const list = cache.categories || [];
+    m.querySelector('#catEditList').innerHTML = list.map((c) => `<li class="cat-edit-row">
+      <input class="bo-input" data-catname="${enc(c)}" value="${escHtml(c)}">
+      <button type="button" class="bo-btn mini" data-catsave="${enc(c)}">Enregistrer</button>
+      <button type="button" class="bo-x" data-catdel="${enc(c)}" title="Supprimer">🗑</button>
+    </li>`).join('') || '<li class="muted">Aucune catégorie</li>';
+    m.querySelectorAll('[data-catsave]').forEach((b) => b.addEventListener('click', async () => {
+      const old = dec(b.dataset.catsave);
+      const input = b.closest('.cat-edit-row')?.querySelector('input');
+      const next = (input?.value || '').trim();
+      if (!next) return ctx.toast('Nom requis');
+      if (next === old) return;
+      try {
+        await db.renameCategory(old, next);
+        cache.categories = await db.getCategories();
+        cache.products = await db.listProducts();
+        paintList(m);
+        drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+        if (ctx.refreshApp) await ctx.refreshApp();
+        ctx.onChanged && ctx.onChanged();
+        ctx.toast('Catégorie « ' + next + ' »');
+      } catch (e) { ctx.toast(e.message); }
+    }));
+    m.querySelectorAll('[data-catdel]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        await db.removeCategory(dec(b.dataset.catdel));
+        cache.categories = await db.getCategories();
+        paintList(m);
+        drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+        if (ctx.refreshApp) await ctx.refreshApp();
+        ctx.onChanged && ctx.onChanged();
+        ctx.toast('Catégorie supprimée');
+      } catch (e) { ctx.toast(e.message); }
+    }));
+  };
+  openModal(`<h3>Catégories</h3>
+    <p class="muted mini">Renommer une catégorie met à jour tous les articles. On ne peut supprimer que si elle est vide.</p>
+    <ul class="cat-edit-list" id="catEditList"></ul>
+    <div class="reg-actions">
+      <input id="catNew" class="bo-input" placeholder="Nouvelle catégorie">
+      <button type="button" class="bo-btn primary" id="catAdd">＋ Ajouter</button>
+    </div>
+    <div class="modal-actions"><button class="bo-btn" data-close>Fermer</button></div>`, (m) => {
+    paintList(m);
+    m.querySelector('#catAdd').addEventListener('click', async () => {
+      const name = m.querySelector('#catNew').value.trim();
+      if (!name) return ctx.toast('Nom de catégorie requis');
+      await db.addCategory(name);
+      m.querySelector('#catNew').value = '';
+      cache.categories = await db.getCategories();
+      paintList(m);
+      drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+      if (ctx.refreshApp) await ctx.refreshApp();
+      ctx.onChanged && ctx.onChanged();
+      ctx.toast('Catégorie « ' + name + ' » ajoutée');
+    });
+  });
+}
 
 /* ============ HISTORIQUE VENTES ============ */
 let vMode = 'detail';
