@@ -7,6 +7,13 @@ import { formatMatchDate } from './catalog';
 let ctx = { toast: () => {} };
 let pendingLogoMatch = null;
 
+function flashOk(node) {
+  if (!node) return;
+  node.classList.remove('flash-ok');
+  void node.offsetWidth;
+  node.classList.add('flash-ok');
+}
+
 // Redimensionne un logo (garde la transparence -> PNG), max px.
 function resizeLogo(file, max) {
   return new Promise((resolve, reject) => {
@@ -236,6 +243,7 @@ export async function renderReglages(host, context) {
         ctx.toast('Catégorie « ' + next + ' »');
         ctx.onChanged && ctx.onChanged();
         renderReglages(host, ctx);
+        flashOk(host.querySelector(`[data-chip="${encodeURIComponent(next)}"]`));
       } catch (e) {
         ctx.toast(e.message);
         renderReglages(host, ctx);

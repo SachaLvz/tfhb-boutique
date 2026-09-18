@@ -15,6 +15,35 @@ if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
 
 const eur = (v) => (Math.round((v || 0) * 100) / 100).toLocaleString('fr-FR') + ' €';
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+function flashOk(node) {
+  if (!node) return;
+  node.classList.remove('flash-ok');
+  void node.offsetWidth;
+  node.classList.add('flash-ok');
+}
+async function runAction(btn, fn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('is-busy');
+  }
+  try {
+    await fn();
+    if (btn && btn.isConnected) {
+      btn.classList.remove('is-busy');
+      btn.classList.add('is-ok');
+      setTimeout(() => {
+        btn.classList.remove('is-ok');
+        btn.disabled = false;
+      }, 800);
+    }
+  } catch (e) {
+    if (btn && btn.isConnected) {
+      btn.classList.remove('is-busy');
+      btn.disabled = false;
+    }
+    throw e;
+  }
+}
 const LOCATIONS = [['physique', 'Physique'], ['en_ligne', 'En ligne'], ['salarie', 'Salariés'], ['archive', 'Archive']];
 const PAY = { espece: 'Espèces', cb: 'CB', cheque: 'Chèque' };
 
@@ -139,6 +168,7 @@ function renderCatalogue(body) {
     await db.transferStock(s, from, to, qty);
     await reload(); paint();
     ctx.toast('Stock transféré');
+    flashOk(body.querySelector('#tGo'));
   });
 }
 
@@ -208,6 +238,7 @@ function drawCatTable(body, filter) {
     p.category = sel.value;
     await db.saveProduct(p);
     ctx.toast('Catégorie enregistrée');
+    flashOk(sel);
     if (ctx.refreshApp) await ctx.refreshApp();
     ctx.onChanged && ctx.onChanged();
   }));
@@ -241,6 +272,7 @@ async function onCellChange(e) {
     const disp = document.getElementById('internesTotal');
     if (disp) disp.textContent = eur(total);
     ctx.toast('Vente salariés enregistrée (comptée dans les recettes)');
+    flashOk(inp);
   } else if (inp.dataset.stock) {
     await db.setStockValue(sku(pid, size), inp.dataset.stock, +inp.value);
     cache.stock = await db.stockMap();
@@ -250,6 +282,7 @@ async function onCellChange(e) {
     const cell = inp.closest('tr').querySelector('.total-cell b');
     if (cell) cell.textContent = tot;
     ctx.toast('Stock enregistré');
+    flashOk(inp);
   } else {
     const p = cache.products.find((x) => x.id === pid);
     const v = p.variants.find((x) => x.size === size);
@@ -257,6 +290,7 @@ async function onCellChange(e) {
     v[f] = inp.value === '' ? (f === 'purchase_price_ht' ? null : 0) : +inp.value;
     await db.saveProduct(p);
     ctx.toast('Prix enregistré');
+    flashOk(inp);
   }
 }
 
@@ -268,7 +302,10 @@ function confirmDeleteProduct(pid) {
     <div class="modal-actions"><button class="bo-btn" data-close>Annuler</button>
     <button class="bo-btn danger" id="doDel">Supprimer</button></div>`, (m) => {
     m.querySelector('#doDel').addEventListener('click', async () => {
-      await db.deleteProduct(pid); closeModal(); await reload(); paint(); ctx.toast('Article supprimé');
+      await runAction(m.querySelector('#doDel'), async () => {
+        await db.deleteProduct(pid);
+      });
+      closeModal(); await reload(); paint(); ctx.toast('Article supprimé');
     });
   });
 }
@@ -310,8 +347,11 @@ function openProductModal() {
       if (hasChild) for (const s of SIZE_SYSTEMS[sys]) variants.push(mkVar(s, sys, child, achat));
       const adultSys = hasChild ? 'adulte' : sys;
       for (const s of SIZE_SYSTEMS[adultSys]) variants.push(mkVar(s, adultSys, hasChild ? adult : (adult || child), achat));
-      await db.saveProduct({ id, name, category: m.querySelector('#pCat').value, variants });
+      await runAction(m.querySelector('#pSave'), async () => {
+        await db.saveProduct({ id, name, category: m.querySelector('#pCat').value, variants });
+      });
       closeModal(); await reload(); paint(); ctx.toast('Article créé');
+      flashOk(host.querySelector(`[data-del="${id}"]`)?.closest('tr'));
     });
   });
 }
@@ -332,11 +372,14 @@ function openCategoriesModal(body) {
       if (!next) return ctx.toast('Nom requis');
       if (next === old) return;
       try {
-        await db.renameCategory(old, next);
+        await runAction(b, async () => {
+          await db.renameCategory(old, next);
+        });
         cache.categories = await db.getCategories();
         cache.products = await db.listProducts();
         paintList(m);
         drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+        flashOk([...m.querySelectorAll('.cat-edit-row')].find((r) => r.querySelector('input')?.value === next));
         if (ctx.refreshApp) await ctx.refreshApp();
         ctx.onChanged && ctx.onChanged();
         ctx.toast('Catégorie « ' + next + ' »');
@@ -344,7 +387,9 @@ function openCategoriesModal(body) {
     }));
     m.querySelectorAll('[data-catdel]').forEach((b) => b.addEventListener('click', async () => {
       try {
-        await db.removeCategory(dec(b.dataset.catdel));
+        await runAction(b, async () => {
+          await db.removeCategory(dec(b.dataset.catdel));
+        });
         cache.categories = await db.getCategories();
         paintList(m);
         drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
@@ -366,11 +411,14 @@ function openCategoriesModal(body) {
     m.querySelector('#catAdd').addEventListener('click', async () => {
       const name = m.querySelector('#catNew').value.trim();
       if (!name) return ctx.toast('Nom de catégorie requis');
-      await db.addCategory(name);
+      await runAction(m.querySelector('#catAdd'), async () => {
+        await db.addCategory(name);
+      });
       m.querySelector('#catNew').value = '';
       cache.categories = await db.getCategories();
       paintList(m);
       drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+      flashOk([...m.querySelectorAll('.cat-edit-row')].find((r) => r.querySelector('input')?.value === name));
       if (ctx.refreshApp) await ctx.refreshApp();
       ctx.onChanged && ctx.onChanged();
       ctx.toast('Catégorie « ' + name + ' » ajoutée');

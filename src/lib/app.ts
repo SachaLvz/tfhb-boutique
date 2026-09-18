@@ -542,7 +542,24 @@ function openMatchPicker() {
 
 // ----- toast -----
 let tt;
-function toast(m) { const t = $('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('on'), 1500); }
+function toast(m, kind = 'ok') {
+  const t = $('toast');
+  if (!t) return;
+  const isErr = kind === 'err' || /erreur|invalide|requis|impossible|échec/i.test(String(m || ''));
+  t.className = 'toast';
+  t.replaceChildren();
+  const ico = document.createElement('span');
+  ico.className = 'toast-ico';
+  ico.setAttribute('aria-hidden', 'true');
+  ico.textContent = isErr ? '!' : '✓';
+  const txt = document.createElement('span');
+  txt.textContent = m;
+  t.append(ico, txt);
+  void t.offsetWidth;
+  t.classList.add('on', isErr ? 'err' : 'ok');
+  clearTimeout(tt);
+  tt = setTimeout(() => t.classList.remove('on', 'ok', 'err'), 2800);
+}
 
 // ----- service worker -----
 async function registerSW() {
