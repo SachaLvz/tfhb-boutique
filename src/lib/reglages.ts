@@ -41,8 +41,8 @@ export async function renderReglages(host, context) {
   <div class="reg">
     <section class="reg-card">
       <h3>Synchronisation multi-poste (Supabase)</h3>
-      <p class="muted">Les données dynamiques (catalogue, stock, ventes, matchs…) sont chargées depuis Supabase.
-      IndexedDB sert de cache hors-ligne. Renseigne l'<b>URL</b> et la <b>clé anon</b> ici ou via <code>.env</code>.
+      <p class="muted">Catalogue, stock, ventes et matchs vivent dans <b>Supabase</b> : l’app les charge au démarrage
+      et enregistre chaque modification tout de suite. Renseigne l'<b>URL</b> et la <b>clé anon</b> ici ou via <code>.env</code>.
       Avant la 1ʳᵉ synchro, exécute <code>supabase-schema.sql</code>
       (tables <code>products</code>, <code>stock</code>, <code>sales</code>, <code>sale_lines</code>, <code>stock_moves</code>…).</p>
 

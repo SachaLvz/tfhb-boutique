@@ -1,8 +1,6 @@
 // @ts-nocheck — logique legacy migrée ; typage progressif
-// Base de données locale hors-ligne (IndexedDB, sans dépendance).
-// Structurée pour une future synchronisation Supabase (Lot 4) :
-// chaque enregistrement porte un id + updated_at ; un journal `outbox`
-// conserve les changements à pousser au serveur quand le réseau revient.
+// Base de données locale — miroir de Supabase (plus de source de vérité hors-ligne).
+// Les écritures sont poussées immédiatement vers le cloud.
 
 import { SEED_CATALOG, SEED_MATCHES, CATEGORIES, sku } from './catalog';
 
@@ -137,10 +135,13 @@ export async function hasLocalCache() {
 const now = () => new Date().toISOString();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
-/** Hook appelé après toute écriture locale (pour push Supabase). */
+/** Hook appelé après toute écriture (pour pousser immédiatement vers Supabase). */
 let _onWrite = null;
 export function onLocalWrite(fn) { _onWrite = fn; }
-function touch() { try { _onWrite && _onWrite(); } catch (_) {} }
+async function touch() {
+  try { if (_onWrite) await _onWrite(); }
+  catch (e) { console.warn('[sync] push', e); }
+}
 
 // --- initialisation : import du catalogue + stock de départ ---
 export async function ensureSeeded() {
@@ -183,19 +184,19 @@ export async function getCategories() {
   for (const c of used) if (c && !out.includes(c)) out.push(c);
   return out;
 }
-export async function setCategories(arr) { await kvSet('categories', arr.slice()); touch(); }
+export async function setCategories(arr) { await kvSet('categories', arr.slice()); await touch(); }
 export async function addCategory(name) {
   name = (name || '').trim();
   if (!name) return;
   const list = (await kvGet('categories', null)) || CATEGORIES.slice();
-  if (!list.includes(name)) { list.push(name); await kvSet('categories', list); touch(); }
+  if (!list.includes(name)) { list.push(name); await kvSet('categories', list); await touch(); }
 }
 export async function removeCategory(name) {
   const used = (await getAll('products')).some((p) => !p.deleted && p.category === name);
   if (used) throw new Error('Catégorie utilisée par des articles — déplace-les d’abord.');
   const list = ((await kvGet('categories', null)) || CATEGORIES.slice()).filter((c) => c !== name);
   await kvSet('categories', list);
-  touch();
+  await touch();
 }
 
 // ===================== PHOTOS D'ARTICLES (importées par l'utilisateur) =====================
@@ -228,7 +229,7 @@ export async function activeSeason() {
   const id = await activeSeasonId();
   return id ? getOne('seasons', id) : null;
 }
-export async function setActiveSeason(id) { await kvSet('active_season', id); touch(); }
+export async function setActiveSeason(id) { await kvSet('active_season', id); await touch(); }
 export async function createSeason(label) {
   const rec = { id: uid(), label, closed_at: null, created_at: now(), updated_at: now() };
   await putMany('seasons', [rec]);
@@ -259,7 +260,7 @@ export async function adjustStock(skuId, location, delta) {
   rec[location] = (rec[location] || 0) + delta;
   rec.updated_at = now();
   await done(os.put(rec));
-  touch();
+  await touch();
   return rec;
 }
 
@@ -342,47 +343,38 @@ export async function applyStockMove({ sku: skuId, direction, qty, location = 'p
   return recordStockMoves([{ sku: skuId, direction: dir, qty: n, location, reason, note }]);
 }
 
-// Remplace l'ancien catalogue par la boutique officielle WePlay (install déjà seedée).
+// Complète le catalogue seed (nouveaux SKU) sans annuler une création / suppression utilisateur.
 export async function ensureRemovedProducts() {
   return ensureCatalog();
 }
 
 export async function ensureCatalog() {
   const existing = await getAll('products');
-  const seedIds = new Set(SEED_CATALOG.map((p) => p.id));
   const byId = new Map(existing.map((p) => [p.id, p]));
   const toPut = [];
 
   for (const p of SEED_CATALOG) {
-    const cur = byId.get(p.id);
-    if (!cur) {
-      toPut.push({ ...p, updated_at: now() });
-      continue;
-    }
-    if (cur.deleted) {
-      toPut.push({ ...cur, ...p, deleted: false, updated_at: now() });
-    }
+    // Uniquement les articles jamais vus : ne pas ressusciter un seed supprimé.
+    if (!byId.has(p.id)) toPut.push({ ...p, updated_at: now() });
   }
   if (toPut.length) {
     await putMany('products', toPut);
-    for (const rec of toPut) await logChange('product', rec);
-  }
-
-  for (const p of existing) {
-    if (!p.deleted && !seedIds.has(p.id)) await deleteProduct(p.id);
+    for (const rec of toPut) {
+      byId.set(rec.id, rec);
+      await logChange('product', rec);
+    }
   }
 
   const stockRows = await getAll('stock');
   const stockBySku = new Map(stockRows.map((s) => [s.sku, s]));
   const stockPut = [];
   for (const p of SEED_CATALOG) {
+    const prod = byId.get(p.id);
+    if (!prod || prod.deleted) continue;
     for (const v of p.variants) {
       const id = sku(p.id, v.size);
-      const cur = stockBySku.get(id);
-      if (!cur) {
+      if (!stockBySku.get(id)) {
         stockPut.push({ sku: id, physique: 0, reserve: 0, en_ligne: 0, archive: 0, updated_at: now() });
-      } else if (cur.deleted) {
-        stockPut.push({ ...cur, deleted: false, updated_at: now() });
       }
     }
   }
@@ -390,9 +382,16 @@ export async function ensureCatalog() {
 
   const cats = await kvGet('categories', []);
   const want = CATEGORIES.slice();
-  if (JSON.stringify(cats) !== JSON.stringify(want)) {
+  if (!Array.isArray(cats) || !cats.length) {
     await kvSet('categories', want);
-    touch();
+    await touch();
+  } else {
+    const merged = cats.slice();
+    for (const c of want) if (!merged.includes(c)) merged.push(c);
+    if (merged.length !== cats.length) {
+      await kvSet('categories', merged);
+      await touch();
+    }
   }
 }
 
@@ -487,7 +486,7 @@ export async function recordSale(sale) {
     match_id: sale.matchId || null,
     match_label: sale.matchLabel || '',
   })));
-  touch();
+  await touch();
   return rec;
 }
 export async function salesForMatch(matchId) {
@@ -657,7 +656,7 @@ export async function voidSale(saleId) {
 
 async function logChange(type, payload) {
   await done((await tx('outbox', 'readwrite')).add({ type, payload, at: now() }));
-  touch();
+  await touch();
 }
 
 // --- export / import complet (round-trip Excel hors-ligne) ---
@@ -684,7 +683,6 @@ export async function replaceCatalog(products, stockRows) {
     t.oncomplete = resolve; t.onerror = () => reject(t.error);
   });
   await logChange('import_catalog', { count: products.length });
-  touch();
 }
 export async function importInvoices(rows, replace = true) {
   const d = await db();
@@ -694,7 +692,7 @@ export async function importInvoices(rows, replace = true) {
     rows.forEach((r) => t.objectStore('invoices').put({ id: r.id || uid(), ...r }));
     t.oncomplete = resolve; t.onerror = () => reject(t.error);
   });
-  touch();
+  await touch();
 }
 
 // ===================== AJUSTEMENTS FINANCES =====================

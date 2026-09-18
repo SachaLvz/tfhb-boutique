@@ -1,8 +1,6 @@
 // @ts-nocheck — logique legacy migrée ; typage progressif
-// Synchronisation Supabase — données dynamiques (source de vérité = cloud).
-// Le navigateur ne parle jamais directement à Supabase : tout passe par
-// /api/sync côté serveur, qui garde les identifiants hors du bundle client.
-// Boot / auto-refresh : pull. Écritures locales : push différé.
+// Synchronisation Supabase — source de vérité unique.
+// IndexedDB n’est qu’un miroir de la dernière réponse cloud, jamais une base locale.
 import * as db from './db';
 
 let _cfgMem = undefined;
@@ -90,7 +88,11 @@ async function withSyncing(fn) {
   }
 }
 
-/** Pousse le cache local vers Supabase (écritures hors-ligne → cloud). */
+let writeEpoch = 0;
+let dirty = false;
+let autoTimer = null;
+
+/** Pousse le miroir vers Supabase. */
 export function pushAll() {
   return enqueueSync(() => withSyncing(pushAllNow));
 }
@@ -102,21 +104,33 @@ async function pushAllNow() {
     db.kvGet('categories', null),
   ]);
   const { pushed } = await callApi('push', { batch, meta: { active_season, categories } });
+  dirty = false;
   return pushed;
 }
 
 /**
- * Charge les données dynamiques depuis Supabase et remplace le cache local.
- * Source de vérité = cloud. IndexedDB ne sert que d’offline cache.
- * omitPhotos : 1er paint plus rapide (les photos arrivent ensuite).
- * photosOnly : ne met à jour que le store photos.
+ * Charge les données depuis Supabase et remplace le miroir.
+ * Un pull périmé (écriture en cours) n’est pas appliqué.
  */
 export function pullAll(opts = {}) {
   return enqueueSync(() => withSyncing(() => pullAllNow(opts)));
 }
 
 async function pullAllNow(opts = {}) {
+  if (dirty) {
+    try {
+      await pushAllNow();
+    } catch (e) {
+      console.warn('[sync] push avant pull', e);
+      return { pulled: 0, empty: false, skipped: true };
+    }
+  }
+
+  const epoch = writeEpoch;
   const r = await callApi('pull', opts);
+  if (dirty || writeEpoch !== epoch) {
+    return { pulled: 0, empty: false, skipped: true };
+  }
 
   if (opts.photosOnly) {
     await db.replaceStore('photos', r.photos || []);
@@ -155,23 +169,19 @@ async function pullAllNow(opts = {}) {
   return { pulled, empty: (r.products || []).length === 0 && (r.matches || []).length === 0 };
 }
 
-/** Sync complète : envoie les écritures locales puis recharge depuis Supabase. */
+/** Envoie les écritures puis recharge depuis Supabase. */
 export function syncNow(opts = {}) {
   return enqueueSync(() => withSyncing(async () => {
     const pushed = await pushAllNow();
-    const { pulled } = await pullAllNow(opts);
-    return { pushed, pulled };
+    const { pulled, skipped } = await pullAllNow(opts);
+    return { pushed, pulled, skipped };
   }));
 }
 
-/**
- * Au démarrage : charge uniquement depuis Supabase si configuré + en ligne.
- * Sinon conserve le cache IndexedDB (mode hors-ligne).
- * Ne seed plus le catalogue local quand Supabase est actif.
- */
+/** Au démarrage : charge uniquement depuis Supabase. */
 export async function loadDynamicData(opts = {}) {
-  if (!(await isConfigured())) return { source: 'local', pulled: 0 };
-  if (!navigator.onLine) return { source: 'cache', pulled: 0 };
+  if (!(await isConfigured())) throw new Error('Supabase non configuré');
+  if (!navigator.onLine) throw new Error('Hors-ligne — Supabase injoignable');
   const r = await pullAll(opts);
   return { source: 'supabase', ...r };
 }
@@ -184,17 +194,11 @@ export async function status() {
   };
 }
 
-let autoTimer = null;
-let pushTimer = null;
-
-/** Déclenche un push différé après une écriture locale (vente, back-office…). */
+/** Écriture utilisateur : push immédiat vers Supabase. */
 export function schedulePush() {
-  if (pushTimer) clearTimeout(pushTimer);
-  pushTimer = setTimeout(async () => {
-    try {
-      if (navigator.onLine && (await isConfigured())) await pushAll();
-    } catch (e) { console.warn('[sync] push', e); }
-  }, 800);
+  writeEpoch++;
+  dirty = true;
+  return pushAll().catch((e) => { console.warn('[sync] push', e); });
 }
 
 export async function startAuto(onSync) {
@@ -202,16 +206,13 @@ export async function startAuto(onSync) {
     try {
       if (navigator.onLine && (await isConfigured())) {
         const r = await pullAll();
-        onSync && onSync(null, { pushed: 0, pulled: r.pulled });
+        onSync && onSync(null, { pushed: 0, pulled: r.pulled, skipped: r.skipped });
       }
     } catch (e) { onSync && onSync(e); }
   };
   window.addEventListener('online', async () => {
     try {
-      if (await isConfigured()) {
-        await pushAll();
-        await tick();
-      }
+      if (await isConfigured()) await tick();
     } catch (e) { onSync && onSync(e); }
   });
   if (autoTimer) clearInterval(autoTimer);

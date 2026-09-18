@@ -58,7 +58,6 @@ const productById = (id) => state.products.find((p) => p.id === id);
 let started = false;
 
 async function hydrateState() {
-  await db.ensureRemovedProducts();
   await reloadCore();
   const savedMatch = await db.kvGet('current_match');
   state.match = state.matches.find((m) => m.id === savedMatch) || state.matches[0];
@@ -76,8 +75,6 @@ function revealUi() {
 }
 
 async function applyCloudToUi() {
-  await db.ensureMatches();
-  await db.ensureCatalog();
   await reloadCore();
   if (curView !== 'caisse' || !$('catGrid')) return;
   renderMatchName();
@@ -86,8 +83,55 @@ async function applyCloudToUi() {
   renderStats();
 }
 
+function wirePageRetry(fn) {
+  const btn = $('pageRetry');
+  if (btn) btn.addEventListener('click', () => void fn());
+}
+
+let autoStarted = false;
+function ensureAutoSync() {
+  if (autoStarted) return;
+  autoStarted = true;
+  sync.startAuto(async (err, r) => {
+    if (err || r?.skipped) return;
+    await applyCloudToUi();
+    if (r && r.pulled) toast('Données à jour ✓');
+  });
+}
+
+async function loadFromCloud() {
+  showPageLoader('Chargement depuis Supabase…');
+  const configured = await sync.isConfigured();
+  if (!configured) {
+    await hydrateState();
+    await revealUi();
+    ensureAutoSync();
+    toast('Supabase non configuré — ouvre Réglages');
+    if (curView !== 'reglages') await switchView('reglages');
+    return;
+  }
+  if (!navigator.onLine) {
+    showPageError('Connexion internet requise pour charger les données depuis Supabase.');
+    wirePageRetry(loadFromCloud);
+    return;
+  }
+  try {
+    await sync.pullAll({ omitPhotos: true });
+  } catch (e) {
+    console.warn('[boot] pull Supabase', e);
+    showPageError('Impossible de charger les données depuis Supabase.');
+    wirePageRetry(loadFromCloud);
+    return;
+  }
+  await hydrateState();
+  await revealUi();
+  ensureAutoSync();
+  void sync.pullAll({ photosOnly: true }).then(applyCloudToUi).catch((e) => {
+    console.warn('[boot] photos', e);
+  });
+}
+
 export async function boot() {
-  // React Fast Refresh recrée le shell DOM : on ré-affiche sans re-seed
   if (started) {
     await resumeAfterRemount();
     return;
@@ -101,63 +145,7 @@ export async function boot() {
   });
   db.onLocalWrite(() => sync.schedulePush());
 
-  const [configured, hasCache] = await Promise.all([
-    sync.isConfigured(),
-    db.hasLocalCache(),
-  ]);
-
-  if (hasCache) {
-    await db.ensureMatches();
-    await hydrateState();
-    await revealUi();
-    if (configured && navigator.onLine) {
-      void (async () => {
-        try {
-          await sync.pullAll();
-          await applyCloudToUi();
-        } catch (e) {
-          console.warn('[boot] pull Supabase échoué, cache local', e);
-        }
-      })();
-    }
-  } else if (configured && navigator.onLine) {
-    try {
-      showPageLoader('Chargement depuis Supabase…');
-      let r = await sync.pullAll({ omitPhotos: true });
-      if (r.empty) {
-        showPageLoader('Initialisation du catalogue…');
-        await db.kvSet('seeded', false);
-        await db.ensureSeeded();
-        await db.ensureMatches();
-        await sync.pushAll();
-        r = await sync.pullAll({ omitPhotos: true });
-        toast('Catalogue initial envoyé vers Supabase');
-      }
-    } catch (e) {
-      console.warn('[boot] pull Supabase échoué, cache local', e);
-      toast('Supabase injoignable — cache local');
-      await db.ensureSeeded();
-    }
-    await db.ensureMatches();
-    await hydrateState();
-    await revealUi();
-    if (navigator.onLine) {
-      void sync.pullAll({ photosOnly: true }).then(applyCloudToUi).catch((e) => {
-        console.warn('[boot] photos', e);
-      });
-    }
-  } else {
-    await db.ensureSeeded();
-    await db.ensureMatches();
-    await hydrateState();
-    await revealUi();
-  }
-
-  sync.startAuto(async (err, r) => {
-    if (err) return;
-    await applyCloudToUi();
-    if (r && r.pulled) toast('Données à jour ✓');
-  });
+  await loadFromCloud();
 }
 
 /** Après un remount React (Fast Refresh) : rebrancher le DOM sans reset IndexedDB. */
