@@ -57,6 +57,9 @@ button{font-family:inherit;touch-action:manipulation}
 .chip{display:flex;align-items:center;gap:7px;font-weight:700;font-size:12.5px;color:#ffe08a;
   background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);padding:7px 12px;border-radius:999px}
 .chip.online{color:#8fe9b4}
+.chip.syncing{color:#9fd4ff}
+.chip.syncing .dot{animation:netPulse .9s ease-in-out infinite}
+@keyframes netPulse{50%{opacity:.3}}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px rgba(255,255,255,.12)}
 
 main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain}
@@ -175,10 +178,33 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .placeholder{max-width:720px;margin:40px auto;padding:24px;text-align:center;color:var(--ink-soft)}
 .placeholder h2{color:var(--ink)}
 
-.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);opacity:0;
-  background:var(--ink);color:var(--bg);padding:12px 18px;border-radius:11px;font-weight:800;
-  box-shadow:var(--shadow);transition:.25s;z-index:60;pointer-events:none}
-.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(16px) scale(.94);
+  opacity:0;visibility:hidden;background:var(--ink);color:#fff;padding:13px 18px;border-radius:14px;font-weight:800;
+  box-shadow:0 10px 28px rgba(12,31,51,.28);transition:opacity .2s,transform .2s,visibility .2s;z-index:120;
+  pointer-events:none;display:flex;align-items:center;gap:10px;font-size:15px;max-width:min(92vw,420px)}
+.toast .toast-ico{flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+  background:var(--green);color:#fff;font-size:13px;line-height:1}
+.toast.err .toast-ico{background:var(--red)}
+.toast.on{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0) scale(1);
+  animation:toast-pop .45s cubic-bezier(.2,1.4,.3,1)}
+@keyframes toast-pop{
+  0%{opacity:0;transform:translateX(-50%) translateY(18px) scale(.86)}
+  60%{opacity:1;transform:translateX(-50%) translateY(-5px) scale(1.04)}
+  100%{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}
+}
+
+.flash-ok{animation:flash-ok .85s ease}
+@keyframes flash-ok{
+  0%{box-shadow:0 0 0 0 rgba(15,157,88,.5);background-color:#d8f6e6}
+  100%{box-shadow:0 0 0 12px rgba(15,157,88,0);background-color:transparent}
+}
+select.flash-ok,input.flash-ok,.cat-badge-sel.flash-ok{border-color:var(--green)!important}
+
+.bo-btn.is-busy{opacity:.75;cursor:wait}
+.bo-btn.is-busy::after{content:"";width:11px;height:11px;border:2px solid currentColor;border-top-color:transparent;
+  border-radius:50%;animation:btn-spin .55s linear infinite}
+.bo-btn.is-ok{background:var(--green)!important;border-color:var(--green)!important;color:#fff!important}
+@keyframes btn-spin{to{transform:rotate(360deg)}}
 
 /* ============ BACK-OFFICE (Lot 2) ============ */
 .bo{max-width:1220px;margin:0 auto;padding:14px}
@@ -206,6 +232,7 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .bo-table td.num,.bo-table th.num{text-align:right;font-variant-numeric:tabular-nums}
 .bo-table tr.prow td{background:color-mix(in srgb,var(--blue) 6%,transparent);border-top:1px solid var(--line)}
 .cat-badge{font-size:11px;font-weight:700;color:var(--ink-soft);background:var(--line-soft);padding:2px 7px;border-radius:6px}
+select.cat-badge-sel{border:1px solid var(--line);cursor:pointer;max-width:140px}
 .bo-cell{width:88px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:7px;
   padding:6px 8px;font-size:13px;font-family:inherit}
 .bo-cell.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -215,6 +242,10 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .mini{font-size:12px}
 .bo-kpis{display:flex;gap:16px;flex-wrap:wrap;margin-left:auto;font-size:14px}
 .bo-kpis b{color:var(--ink)}
+.move-badge{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;white-space:nowrap}
+.move-badge.move-in{color:#157347;background:#e6f6ed}
+.move-badge.move-out{color:#b42318;background:#fde8e6}
 .bo-kpis.big{margin:0 0 14px;gap:22px}
 .bo-kpis.big span{display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--line);
   border-radius:10px;padding:10px 16px;color:var(--ink-soft);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
@@ -254,9 +285,23 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .io-card h3{margin:0}
 .modal{width:min(560px,96vw);padding:20px}
 .modal h3{margin:0 0 12px}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.form-grid > *{min-width:0}
 .form-grid label{display:flex;flex-direction:column;gap:5px;font-weight:700;font-size:13px;color:var(--ink-soft)}
+.form-grid .bo-input,.modal .bo-input{width:100%;min-width:0;max-width:100%;box-sizing:border-box}
+.form-grid .move-span{grid-column:1 / -1}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+.sheet.modal.move-modal{
+  display:flex;flex-direction:column;width:min(520px,96vw);max-width:96vw;
+  height:auto;max-height:calc(100vh - 32px);overflow:auto;padding:20px;
+}
+.move-modal h3{flex:0 0 auto;margin:0;padding:0 0 12px;display:block;border:none;position:static}
+.move-form{flex:0 0 auto;min-height:0;overflow:visible;padding-bottom:0}
+.move-modal .move-hint{flex:0 0 auto;margin:10px 0 0}
+.move-modal .modal-actions{
+  flex:0 0 auto;position:static;margin:16px 0 0;padding:16px 0 0;
+  background:var(--panel);border-top:1px solid var(--line);
+}
 
 /* ============ FINANCES (Lot 3) ============ */
 .fin{max-width:1220px;margin:0 auto;padding:14px;display:flex;flex-direction:column;gap:14px}
@@ -346,6 +391,11 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .cat-chip{display:inline-flex;align-items:center;gap:7px;background:var(--line-soft);border:1px solid var(--line);
   border-radius:999px;padding:6px 13px;font-weight:700;font-size:13px}
 .cat-chip button{border:none;background:transparent;color:var(--red);font-weight:900;cursor:pointer;font-size:15px;line-height:1;padding:0}
+.cat-chip button.cat-ren{color:var(--ink-soft);font-size:13px;font-weight:700}
+.cat-chip-input{width:120px;max-width:28vw;padding:2px 6px;font-weight:700;font-size:13px}
+.cat-edit-list{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:8px}
+.cat-edit-row{display:flex;gap:8px;align-items:center}
+.cat-edit-row .bo-input{flex:1}
 
 /* Logos des équipes (par match) */
 .match-logo{width:26px;height:26px;object-fit:contain;border-radius:5px;vertical-align:middle;background:transparent}
@@ -376,6 +426,7 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 
 @media (prefers-reduced-motion:reduce){
   .page-loader-spin{animation:none;border-top-color:var(--line);border-color:var(--blue)}
+  .chip.syncing .dot{animation:none}
 }
 
 /* =========================================================
@@ -485,8 +536,13 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
   .match-list{grid-template-columns:1fr;gap:8px;padding:12px}
   .match-list button{padding:12px}
 
-  .toast{left:12px;right:12px;bottom:16px;transform:translateY(20px);width:auto;text-align:center;font-size:13.5px;padding:11px 14px}
-  .toast.on{transform:translateY(0)}
+  .toast{left:12px;right:12px;bottom:16px;transform:translateY(16px) scale(.94);width:auto;text-align:left;font-size:14px;padding:12px 14px}
+  .toast.on{transform:translateY(0) scale(1);animation-name:toast-pop-m}
+  @keyframes toast-pop-m{
+    0%{opacity:0;transform:translateY(16px) scale(.9)}
+    60%{opacity:1;transform:translateY(-4px) scale(1.03)}
+    100%{opacity:1;transform:translateY(0) scale(1)}
+  }
 
   /* Back-office */
   .bo,.fin,.reg{padding:10px}
@@ -511,6 +567,20 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
   .modal{width:100%;max-width:100%;border-radius:16px 16px 0 0;padding:16px;max-height:92vh;overflow:auto}
   .modal-actions{flex-wrap:wrap}
   .modal-actions .bo-btn{flex:1 1 auto;justify-content:center}
+  .sheet.modal.move-modal{
+    width:100%;max-width:100%;height:auto;max-height:min(94vh,94dvh);
+    overflow:hidden;padding:16px 16px 0;border-radius:16px 16px 0 0;
+  }
+  .move-modal h3{padding:0 0 10px;font-size:17px;letter-spacing:.4px}
+  .move-modal .move-form{
+    flex:1 1 auto;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;
+    grid-template-columns:1fr;gap:10px;
+  }
+  .move-modal .bo-input{min-height:44px;font-size:16px;flex:none}
+  .move-modal .modal-actions{
+    position:sticky;bottom:0;z-index:1;margin:12px -16px 0;
+    padding:12px 16px max(16px,env(safe-area-inset-bottom));
+  }
 
   /* Finances */
   .fin{gap:10px}

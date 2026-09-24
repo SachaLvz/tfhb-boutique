@@ -104,7 +104,7 @@ export default function CaisseApp() {
         </div>
       </div>
 
-      <div className="toast" id="toast" />
+      <div className="toast" id="toast" role="status" aria-live="polite" />
       <div id="modalHost" />
     </>
   );

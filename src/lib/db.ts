@@ -1,19 +1,27 @@
 // @ts-nocheck — logique legacy migrée ; typage progressif
-// Base de données locale hors-ligne (IndexedDB, sans dépendance).
-// Structurée pour une future synchronisation Supabase (Lot 4) :
-// chaque enregistrement porte un id + updated_at ; un journal `outbox`
-// conserve les changements à pousser au serveur quand le réseau revient.
+// Base de données locale — miroir de Supabase (plus de source de vérité hors-ligne).
+// Les écritures sont poussées immédiatement vers le cloud.
 
 import { SEED_CATALOG, SEED_MATCHES, CATEGORIES, sku } from './catalog';
 
 const DB_NAME = 'tfhb-boutique';
-const DB_VERSION = 5;
-const STORES = ['kv', 'products', 'stock', 'matches', 'sales', 'invoices', 'seasons', 'fin_adjust', 'photos', 'tombstones', 'outbox'];
+const DB_VERSION = 6;
+const STORES = ['kv', 'products', 'stock', 'matches', 'sales', 'invoices', 'seasons', 'fin_adjust', 'photos', 'stock_moves', 'tombstones', 'outbox'];
 // tables répliquées vers Supabase (Lot 4) : [store, clé primaire]
 export const SYNC_TABLES = [
   ['products', 'id'], ['stock', 'sku'], ['matches', 'id'],
   ['sales', 'id'], ['invoices', 'id'], ['seasons', 'id'], ['fin_adjust', 'id'], ['photos', 'id'],
+  ['stock_moves', 'id'],
 ];
+
+export const STOCK_MOVE_REASONS = {
+  vente: 'Vente',
+  remboursement: 'Remboursement',
+  reassort: 'Réassort / entrée',
+  ajustement: 'Ajustement',
+  transfert: 'Transfert',
+  vidage: 'Vidage stock',
+};
 
 let _db = null;
 
@@ -34,6 +42,12 @@ function open() {
       if (!db.objectStoreNames.contains('seasons')) db.createObjectStore('seasons', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('fin_adjust')) db.createObjectStore('fin_adjust', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('stock_moves')) {
+        const m = db.createObjectStore('stock_moves', { keyPath: 'id' });
+        m.createIndex('by_sku', 'sku');
+        m.createIndex('by_product', 'product_id');
+        m.createIndex('by_season', 'season_id');
+      }
       if (!db.objectStoreNames.contains('tombstones')) db.createObjectStore('tombstones', { keyPath: 'key' });
       if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'seq', autoIncrement: true });
     };
@@ -78,24 +92,56 @@ async function putMany(store, items) {
 
 /** Remplace entièrement un object store (source de vérité distante). */
 export async function replaceStore(store, items) {
+  return replaceStores({ [store]: items });
+}
+
+/** Remplace plusieurs stores dans une seule transaction IndexedDB. */
+export async function replaceStores(map) {
+  const names = Object.keys(map);
+  if (!names.length) return;
   const d = await db();
   await new Promise((resolve, reject) => {
-    const t = d.transaction(store, 'readwrite');
-    const os = t.objectStore(store);
-    os.clear();
-    (items || []).forEach((it) => os.put(it));
+    const t = d.transaction(names, 'readwrite');
+    for (const store of names) {
+      const os = t.objectStore(store);
+      os.clear();
+      (map[store] || []).forEach((it) => os.put(it));
+    }
     t.oncomplete = resolve;
     t.onerror = () => reject(t.error);
   });
 }
 
+export async function kvSetMany(entries) {
+  if (!entries.length) return;
+  const d = await db();
+  await new Promise((resolve, reject) => {
+    const t = d.transaction('kv', 'readwrite');
+    const os = t.objectStore('kv');
+    for (const [key, value] of entries) os.put(value, key);
+    t.oncomplete = resolve;
+    t.onerror = () => reject(t.error);
+  });
+}
+
+export async function hasLocalCache() {
+  const [seeded, last] = await Promise.all([
+    kvGet('seeded', false),
+    kvGet('last_sync', null),
+  ]);
+  return !!(seeded || last);
+}
+
 const now = () => new Date().toISOString();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
-/** Hook appelé après toute écriture locale (pour push Supabase). */
+/** Hook appelé après toute écriture (pour pousser immédiatement vers Supabase). */
 let _onWrite = null;
 export function onLocalWrite(fn) { _onWrite = fn; }
-function touch() { try { _onWrite && _onWrite(); } catch (_) {} }
+async function touch() {
+  try { if (_onWrite) await _onWrite(); }
+  catch (e) { console.warn('[sync] push', e); }
+}
 
 // --- initialisation : import du catalogue + stock de départ ---
 export async function ensureSeeded() {
@@ -105,18 +151,16 @@ export async function ensureSeeded() {
   const products = SEED_CATALOG.map((p) => ({ ...p, updated_at: now() }));
   await putMany('products', products);
 
-  // Stock de démonstration (à remplacer par l'import Excel réel — Lot 2).
   const stock = [];
   for (const p of SEED_CATALOG) {
     for (const v of p.variants) {
-      const demo = v.size === 'TU' ? 20 : (2 + ((p.name.length + v.size.length) % 6));
-      stock.push({ sku: sku(p.id, v.size), physique: demo, reserve: demo, en_ligne: 0, archive: 0, updated_at: now() });
+      stock.push({ sku: sku(p.id, v.size), physique: 0, reserve: 0, en_ligne: 0, archive: 0, updated_at: now() });
     }
   }
   await putMany('stock', stock);
 
   const matches = SEED_MATCHES.map((m) => ({
-    id: uid(), code: m.code, label: m.label, date: null, channel: 'physique', updated_at: now(),
+    id: uid(), code: m.code, label: m.label, date: m.date || null, logo: m.logo || null, channel: 'physique', updated_at: now(),
   }));
   // Canal "Boutique en ligne" toujours disponible
   matches.push({ id: uid(), code: 'WEB', label: 'Boutique en ligne', date: null, channel: 'en_ligne', updated_at: now() });
@@ -140,19 +184,49 @@ export async function getCategories() {
   for (const c of used) if (c && !out.includes(c)) out.push(c);
   return out;
 }
-export async function setCategories(arr) { await kvSet('categories', arr.slice()); touch(); }
+export async function setCategories(arr) { await kvSet('categories', arr.slice()); await touch(); }
 export async function addCategory(name) {
   name = (name || '').trim();
   if (!name) return;
   const list = (await kvGet('categories', null)) || CATEGORIES.slice();
-  if (!list.includes(name)) { list.push(name); await kvSet('categories', list); touch(); }
+  if (!list.includes(name)) { list.push(name); await kvSet('categories', list); await touch(); }
 }
 export async function removeCategory(name) {
   const used = (await getAll('products')).some((p) => !p.deleted && p.category === name);
   if (used) throw new Error('Catégorie utilisée par des articles — déplace-les d’abord.');
   const list = ((await kvGet('categories', null)) || CATEGORIES.slice()).filter((c) => c !== name);
   await kvSet('categories', list);
-  touch();
+  await touch();
+}
+export async function renameCategory(from, to) {
+  from = (from || '').trim();
+  to = (to || '').trim();
+  if (!from) throw new Error('Nom actuel requis');
+  if (!to) throw new Error('Nouveau nom requis');
+  if (from === to) return to;
+  const list = ((await kvGet('categories', null)) || CATEGORIES.slice()).slice();
+  const next = [];
+  const seen = new Set();
+  for (const c of list) {
+    const name = c === from ? to : c;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    next.push(name);
+  }
+  if (!seen.has(to)) next.push(to);
+  await kvSet('categories', next);
+  const products = await getAll('products');
+  const changed = [];
+  for (const p of products) {
+    if (p.category === from) {
+      p.category = to;
+      p.updated_at = now();
+      changed.push(p);
+    }
+  }
+  if (changed.length) await putMany('products', changed);
+  await touch();
+  return to;
 }
 
 // ===================== PHOTOS D'ARTICLES (importées par l'utilisateur) =====================
@@ -185,7 +259,7 @@ export async function activeSeason() {
   const id = await activeSeasonId();
   return id ? getOne('seasons', id) : null;
 }
-export async function setActiveSeason(id) { await kvSet('active_season', id); touch(); }
+export async function setActiveSeason(id) { await kvSet('active_season', id); await touch(); }
 export async function createSeason(label) {
   const rec = { id: uid(), label, closed_at: null, created_at: now(), updated_at: now() };
   await putMany('seasons', [rec]);
@@ -216,16 +290,138 @@ export async function adjustStock(skuId, location, delta) {
   rec[location] = (rec[location] || 0) + delta;
   rec.updated_at = now();
   await done(os.put(rec));
-  touch();
+  await touch();
   return rec;
 }
 
-// Retire les produits abandonnés (soft-delete) — marche sur install existante.
-const DEPRECATED_PRODUCTS = ['peluche'];
+function splitSku(skuId) {
+  const s = String(skuId || '');
+  const i = s.indexOf('|');
+  if (i < 0) return { product_id: s, size: '' };
+  return { product_id: s.slice(0, i), size: s.slice(i + 1) };
+}
+
+async function skuMeta(skuId) {
+  const { product_id, size } = splitSku(skuId);
+  const p = product_id ? await getOne('products', product_id) : null;
+  return {
+    product_id,
+    size,
+    product_name: p?.name || product_id || skuId,
+    category: p?.category || '',
+  };
+}
+
+/** Journal d'entrées / sorties (vente, remboursement, réassort, ajustement…). */
+export async function recordStockMoves(entries) {
+  if (!entries?.length) return [];
+  const season_id = await kvGet('active_season', null);
+  const recs = [];
+  for (const e of entries) {
+    const qty = Math.abs(Math.round(e.qty || 0));
+    if (!qty) continue;
+    const meta = await skuMeta(e.sku);
+    recs.push({
+      id: uid(),
+      sku: e.sku,
+      product_id: e.product_id || meta.product_id,
+      product_name: e.product_name || meta.product_name,
+      size: e.size || meta.size,
+      category: e.category || meta.category || '',
+      direction: e.direction === 'in' ? 'in' : 'out',
+      reason: e.reason || 'ajustement',
+      qty,
+      location: e.location || 'physique',
+      location_to: e.location_to || null,
+      sale_id: e.sale_id || null,
+      match_id: e.match_id || null,
+      match_label: e.match_label || '',
+      note: e.note || '',
+      season_id,
+      deleted: false,
+      created_at: now(),
+      updated_at: now(),
+    });
+  }
+  if (!recs.length) return [];
+  await putMany('stock_moves', recs);
+  for (const rec of recs) await logChange('stock_move', rec);
+  return recs;
+}
+
+export async function listStockMoves({ seasonId, sku: skuId, productId, direction, reason } = {}) {
+  let all = [];
+  try {
+    all = (await getAll('stock_moves')).filter((m) => !m.deleted);
+  } catch (_) {
+    return [];
+  }
+  if (seasonId) all = all.filter((m) => !m.season_id || m.season_id === seasonId);
+  if (skuId) all = all.filter((m) => m.sku === skuId);
+  if (productId) all = all.filter((m) => m.product_id === productId);
+  if (direction) all = all.filter((m) => m.direction === direction);
+  if (reason) all = all.filter((m) => m.reason === reason);
+  return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+}
+
+/** Applique un mouvement manuel (entrée ou sortie) et met à jour le stock. */
+export async function applyStockMove({ sku: skuId, direction, qty, location = 'physique', reason = 'reassort', note = '' }) {
+  const n = Math.round(+qty || 0);
+  if (n <= 0) throw new Error('Quantité invalide');
+  const dir = direction === 'out' ? 'out' : 'in';
+  await adjustStock(skuId, location, dir === 'out' ? -n : n);
+  return recordStockMoves([{ sku: skuId, direction: dir, qty: n, location, reason, note }]);
+}
+
+// Complète le catalogue seed (nouveaux SKU) sans annuler une création / suppression utilisateur.
 export async function ensureRemovedProducts() {
-  for (const id of DEPRECATED_PRODUCTS) {
-    const p = await getOne('products', id);
-    if (p && !p.deleted) await deleteProduct(id);
+  return ensureCatalog();
+}
+
+export async function ensureCatalog() {
+  const existing = await getAll('products');
+  const byId = new Map(existing.map((p) => [p.id, p]));
+  const toPut = [];
+
+  for (const p of SEED_CATALOG) {
+    // Uniquement les articles jamais vus : ne pas ressusciter un seed supprimé.
+    if (!byId.has(p.id)) toPut.push({ ...p, updated_at: now() });
+  }
+  if (toPut.length) {
+    await putMany('products', toPut);
+    for (const rec of toPut) {
+      byId.set(rec.id, rec);
+      await logChange('product', rec);
+    }
+  }
+
+  const stockRows = await getAll('stock');
+  const stockBySku = new Map(stockRows.map((s) => [s.sku, s]));
+  const stockPut = [];
+  for (const p of SEED_CATALOG) {
+    const prod = byId.get(p.id);
+    if (!prod || prod.deleted) continue;
+    for (const v of p.variants) {
+      const id = sku(p.id, v.size);
+      if (!stockBySku.get(id)) {
+        stockPut.push({ sku: id, physique: 0, reserve: 0, en_ligne: 0, archive: 0, updated_at: now() });
+      }
+    }
+  }
+  if (stockPut.length) await putMany('stock', stockPut);
+
+  const cats = await kvGet('categories', []);
+  const want = CATEGORIES.slice();
+  if (!Array.isArray(cats) || !cats.length) {
+    await kvSet('categories', want);
+    await touch();
+  } else {
+    const merged = cats.slice();
+    for (const c of want) if (!merged.includes(c)) merged.push(c);
+    if (merged.length !== cats.length) {
+      await kvSet('categories', merged);
+      await touch();
+    }
   }
 }
 
@@ -259,14 +455,45 @@ export async function setMatchLogo(id, dataUrl) {
 // fonctionne aussi sur une install déjà initialisée.
 export async function ensureMatches() {
   const existing = await getAll('matches');
-  const codes = new Set(existing.map((m) => m.code));
-  const want = [
-    { code: 'J-0', label: 'Guiscard', channel: 'physique' },
-    { code: 'SAL', label: 'Salariés', channel: 'salarie' },
+  const byCode = new Map(existing.map((m) => [m.code, m]));
+  const extras = [
+    { code: 'J-0', label: 'Guiscard', date: null, channel: 'physique' },
+    { code: 'SAL', label: 'Salariés', date: null, channel: 'salarie' },
+    { code: 'WEB', label: 'Boutique en ligne', date: null, channel: 'en_ligne' },
   ];
-  const toAdd = want.filter((w) => !codes.has(w.code))
-    .map((w) => ({ id: uid(), date: null, updated_at: now(), ...w }));
-  if (toAdd.length) await putMany('matches', toAdd);
+  const want = [
+    ...SEED_MATCHES.map((m) => ({ code: m.code, label: m.label, date: m.date || null, logo: m.logo || null, channel: 'physique' })),
+    ...extras,
+  ];
+  const homeCodes = new Set(SEED_MATCHES.map((m) => m.code));
+  const toPut = [];
+  for (const w of want) {
+    const cur = byCode.get(w.code);
+    if (!cur) {
+      toPut.push({ id: uid(), updated_at: now(), ...w });
+      continue;
+    }
+    const isHome = homeCodes.has(w.code);
+    if (cur.deleted && !isHome) continue;
+    const nextDate = w.date || cur.date || null;
+    const nextLabel = w.label || cur.label;
+    const nextLogo = cur.logo || w.logo || null;
+    const revive = !!(cur.deleted && isHome);
+    if (revive || nextDate !== (cur.date || null) || nextLabel !== cur.label || nextLogo !== (cur.logo || null)) {
+      toPut.push({
+        ...cur,
+        deleted: false,
+        label: nextLabel,
+        date: nextDate,
+        logo: nextLogo,
+        channel: w.channel || cur.channel || 'physique',
+        updated_at: now(),
+      });
+    }
+  }
+  if (!toPut.length) return;
+  await putMany('matches', toPut);
+  for (const rec of toPut) await logChange('match', rec);
 }
 
 // --- ventes ---
@@ -277,7 +504,19 @@ export async function recordSale(sale) {
   // décrément du stock (emplacement selon canal)
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
   for (const l of sale.lines) await adjustStock(l.sku, loc, -l.qty);
-  touch();
+  await recordStockMoves((sale.lines || []).map((l) => ({
+    sku: l.sku,
+    product_name: l.name,
+    size: l.size,
+    direction: 'out',
+    reason: 'vente',
+    qty: l.qty,
+    location: loc,
+    sale_id: rec.id,
+    match_id: sale.matchId || null,
+    match_label: sale.matchLabel || '',
+  })));
+  await touch();
   return rec;
 }
 export async function salesForMatch(matchId) {
@@ -324,13 +563,25 @@ export async function deleteProduct(productId) {
 }
 
 // --- stock : réglage direct, entrée/réassort, transfert ---
-export async function setStockValue(skuId, location, value) {
+export async function setStockValue(skuId, location, value, meta = {}) {
   const os = await tx('stock', 'readwrite');
   const rec = (await done(os.get(skuId))) || { sku: skuId, physique: 0, reserve: 0, en_ligne: 0, archive: 0 };
+  const prev = rec[location] || 0;
   rec[location] = Math.max(0, Math.round(value));
   rec.updated_at = now();
   await done(os.put(rec));
   await logChange('stock', rec);
+  const delta = rec[location] - prev;
+  if (delta) {
+    await recordStockMoves([{
+      sku: skuId,
+      direction: delta > 0 ? 'in' : 'out',
+      reason: meta.reason || (delta > 0 ? 'reassort' : 'ajustement'),
+      qty: Math.abs(delta),
+      location,
+      note: meta.note || '',
+    }]);
+  }
   return rec;
 }
 
@@ -338,6 +589,7 @@ export async function setStockValue(skuId, location, value) {
 export async function clearAllStock() {
   const all = await getAll('stock');
   const updated = [];
+  const moves = [];
   let cleared = 0;
   for (const s of all) {
     if (s.deleted) continue;
@@ -355,11 +607,18 @@ export async function clearAllStock() {
     };
     updated.push(rec);
     if (before > 0) cleared++;
+    for (const loc of ['physique', 'en_ligne', 'reserve', 'archive', 'salarie']) {
+      const q = s[loc] || 0;
+      if (q > 0) {
+        moves.push({ sku: s.sku, direction: 'out', qty: q, location: loc, reason: 'vidage' });
+      }
+    }
   }
   if (updated.length) {
     await putMany('stock', updated);
     for (const rec of updated) await logChange('stock', rec);
   }
+  if (moves.length) await recordStockMoves(moves);
   return cleared;
 }
 export async function transferStock(skuId, from, to, qty) {
@@ -371,6 +630,12 @@ export async function transferStock(skuId, from, to, qty) {
   rec.updated_at = now();
   await done(os.put(rec));
   await logChange('stock', rec);
+  if (move > 0) {
+    await recordStockMoves([
+      { sku: skuId, direction: 'out', qty: move, location: from, location_to: to, reason: 'transfert' },
+      { sku: skuId, direction: 'in', qty: move, location: to, reason: 'transfert', note: `depuis ${from}` },
+    ]);
+  }
   return rec;
 }
 
@@ -401,6 +666,19 @@ export async function voidSale(saleId) {
   if (!sale || sale.deleted) return;
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
   for (const l of sale.lines) await adjustStock(l.sku, loc, +l.qty);
+  await recordStockMoves((sale.lines || []).map((l) => ({
+    sku: l.sku,
+    product_name: l.name,
+    size: l.size,
+    direction: 'in',
+    reason: 'remboursement',
+    qty: l.qty,
+    location: loc,
+    sale_id: sale.id,
+    match_id: sale.matchId || null,
+    match_label: sale.matchLabel || '',
+    note: 'Annulation de vente',
+  })));
   sale.deleted = true; sale.updated_at = now();
   await putMany('sales', [sale]);
   await logChange('sale', sale);
@@ -408,7 +686,7 @@ export async function voidSale(saleId) {
 
 async function logChange(type, payload) {
   await done((await tx('outbox', 'readwrite')).add({ type, payload, at: now() }));
-  touch();
+  await touch();
 }
 
 // --- export / import complet (round-trip Excel hors-ligne) ---
@@ -420,6 +698,7 @@ export async function exportState() {
     matches: await getAll('matches'),
     sales: await getAll('sales'),
     invoices: await getAll('invoices'),
+    stock_moves: await getAll('stock_moves'),
   };
 }
 // Remplace catalogue + stock (import depuis un classeur édité hors-ligne).
@@ -434,7 +713,6 @@ export async function replaceCatalog(products, stockRows) {
     t.oncomplete = resolve; t.onerror = () => reject(t.error);
   });
   await logChange('import_catalog', { count: products.length });
-  touch();
 }
 export async function importInvoices(rows, replace = true) {
   const d = await db();
@@ -444,7 +722,7 @@ export async function importInvoices(rows, replace = true) {
     rows.forEach((r) => t.objectStore('invoices').put({ id: r.id || uid(), ...r }));
     t.oncomplete = resolve; t.onerror = () => reject(t.error);
   });
-  touch();
+  await touch();
 }
 
 // ===================== AJUSTEMENTS FINANCES =====================
@@ -516,9 +794,10 @@ export async function setVentesInternes(amount) {
 
 // Toutes les lignes locales à pousser, par table.
 export async function getSyncBatch() {
-  const batch = {};
-  for (const [store] of SYNC_TABLES) batch[store] = await getAll(store);
-  return batch;
+  const entries = await Promise.all(
+    SYNC_TABLES.map(async ([store]) => [store, await getAll(store)]),
+  );
+  return Object.fromEntries(entries);
 }
 
 // Applique des lignes distantes en local ; renvoie le nombre d'écritures.

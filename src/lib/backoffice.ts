@@ -15,6 +15,35 @@ if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
 
 const eur = (v) => (Math.round((v || 0) * 100) / 100).toLocaleString('fr-FR') + ' €';
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+function flashOk(node) {
+  if (!node) return;
+  node.classList.remove('flash-ok');
+  void node.offsetWidth;
+  node.classList.add('flash-ok');
+}
+async function runAction(btn, fn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('is-busy');
+  }
+  try {
+    await fn();
+    if (btn && btn.isConnected) {
+      btn.classList.remove('is-busy');
+      btn.classList.add('is-ok');
+      setTimeout(() => {
+        btn.classList.remove('is-ok');
+        btn.disabled = false;
+      }, 800);
+    }
+  } catch (e) {
+    if (btn && btn.isConnected) {
+      btn.classList.remove('is-busy');
+      btn.disabled = false;
+    }
+    throw e;
+  }
+}
 const LOCATIONS = [['physique', 'Physique'], ['en_ligne', 'En ligne'], ['salarie', 'Salariés'], ['archive', 'Archive']];
 const PAY = { espece: 'Espèces', cb: 'CB', cheque: 'Chèque' };
 const LINE_MODES = { abonne: 'Abonné', com: 'Imput. com', special: 'Demande spéciale' };
@@ -40,6 +69,7 @@ async function reload() {
   cache.matches = await db.listMatches();
   cache.invoices = await db.listInvoices();
   cache.sales = await db.allSales(cache.seasonId);
+  cache.moves = await db.listStockMoves({ seasonId: cache.seasonId });
   cache.internes = await db.getVentesInternes(cache.seasonId);
   // agrégat des ventes par sku (saison active) : quantité + total €
   cache.sold = {};
@@ -52,6 +82,7 @@ async function reload() {
 const SUBS = [
   ['catalogue', 'Catalogue & Stock'],
   ['ventes', 'Historique ventes'],
+  ['mouvements', 'Entrées / Sorties'],
   ['factures', 'Factures & Marquage'],
   ['io', 'Import / Export'],
 ];
@@ -77,12 +108,14 @@ function paint() {
     body.innerHTML = '';
     if (sub === 'catalogue') renderCatalogue(body);
     else if (sub === 'ventes') renderVentes(body);
+    else if (sub === 'mouvements') renderMouvements(body);
     else if (sub === 'factures') renderFactures(body);
     else renderIO(body);
   }));
   const body = wrap.querySelector('#boBody');
   if (sub === 'catalogue') renderCatalogue(body);
   else if (sub === 'ventes') renderVentes(body);
+  else if (sub === 'mouvements') renderMouvements(body);
   else if (sub === 'factures') renderFactures(body);
   else renderIO(body);
 }
@@ -106,6 +139,7 @@ function renderCatalogue(body) {
         <span id="internesTotal" class="internes-total">${eur(cache.internes || 0)}</span>
         <span class="muted mini">(= somme de la colonne « Vente salariés € », comptée dans les recettes)</span>
       </div>
+      <button id="editCats" class="bo-btn">Catégories</button>
       <button id="addProd" class="bo-btn primary">＋ Ajouter un article</button>
     </div>
     <input type="file" id="photoFile" accept="image/*" hidden>
@@ -114,6 +148,7 @@ function renderCatalogue(body) {
   fillTransferSkus(body);
   drawCatTable(body, '');
   body.querySelector('#boSearch').addEventListener('input', (e) => drawCatTable(body, e.target.value.toLowerCase()));
+  body.querySelector('#editCats').addEventListener('click', () => openCategoriesModal(body));
   body.querySelector('#addProd').addEventListener('click', () => openProductModal());
   body.querySelector('#photoFile').addEventListener('change', async (e) => {
     const file = e.target.files[0]; e.target.value = '';
@@ -134,6 +169,7 @@ function renderCatalogue(body) {
     await db.transferStock(s, from, to, qty);
     await reload(); paint();
     ctx.toast('Stock transféré');
+    flashOk(body.querySelector('#tGo'));
   });
 }
 
@@ -151,12 +187,16 @@ function drawCatTable(body, filter) {
   const rows = [];
   for (const p of cache.products) {
     if (filter && !p.name.toLowerCase().includes(filter)) continue;
-    const hasPhoto = !!cache.photos[p.id];
+    const photo = cache.photos[p.id] || `/assets/produits/${p.id}.png`;
     rows.push(`<tr class="prow"><td colspan="5"><span class="prow-main">
-        ${hasPhoto ? `<img class="prow-thumb" src="${cache.photos[p.id]}" alt="">` : ''}
-        <b>${p.name}</b> <span class="cat-badge">${p.category}</span>
-        <button class="bo-btn mini" data-photo="${p.id}">📷 ${hasPhoto ? 'Changer la photo' : 'Ajouter une photo'}</button>
-        ${hasPhoto ? `<button class="bo-btn mini" data-photodel="${p.id}">Retirer</button>` : ''}
+        <img class="prow-thumb" src="${photo}" alt="" onerror="this.remove()">
+        <b>${p.name}</b>
+        <select class="cat-badge cat-badge-sel" data-setcat="${p.id}" title="Changer la catégorie">
+          ${cache.categories.map((c) => `<option value="${escHtml(c)}" ${c === p.category ? 'selected' : ''}>${escHtml(c)}</option>`).join('')}
+        </select>
+        <button class="bo-btn mini" data-photo="${p.id}">📷 ${cache.photos[p.id] ? 'Changer la photo' : 'Ajouter une photo'}</button>
+        ${cache.photos[p.id] ? `<button class="bo-btn mini" data-photodel="${p.id}">Retirer</button>` : ''}
+        <button class="bo-btn mini" data-moves="${p.id}">Journal</button>
       </span></td>
       <td colspan="6" class="muted">${p.variants.length} taille(s)</td>
       <td><button class="bo-x" data-del="${p.id}" title="Supprimer l'article">🗑</button></td></tr>`);
@@ -188,9 +228,25 @@ function drawCatTable(body, filter) {
     await db.deletePhoto(b.dataset.photodel); cache.photos = await db.photosMap();
     drawCatTable(body, filter); ctx.toast('Photo retirée');
   }));
+  t.querySelectorAll('[data-moves]').forEach((b) => b.addEventListener('click', () => {
+    moveProductFilter = b.dataset.moves;
+    sub = 'mouvements';
+    paint();
+  }));
+  t.querySelectorAll('[data-setcat]').forEach((sel) => sel.addEventListener('change', async () => {
+    const p = cache.products.find((x) => x.id === sel.dataset.setcat);
+    if (!p || p.category === sel.value) return;
+    p.category = sel.value;
+    await db.saveProduct(p);
+    ctx.toast('Catégorie enregistrée');
+    flashOk(sel);
+    if (ctx.refreshApp) await ctx.refreshApp();
+    ctx.onChanged && ctx.onChanged();
+  }));
 }
 
 let pendingPhotoPid = null;
+let moveProductFilter = '';
 function resizeImage(file, max) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -217,6 +273,7 @@ async function onCellChange(e) {
     const disp = document.getElementById('internesTotal');
     if (disp) disp.textContent = eur(total);
     ctx.toast('Vente salariés enregistrée (comptée dans les recettes)');
+    flashOk(inp);
   } else if (inp.dataset.stock) {
     await db.setStockValue(sku(pid, size), inp.dataset.stock, +inp.value);
     cache.stock = await db.stockMap();
@@ -226,6 +283,7 @@ async function onCellChange(e) {
     const cell = inp.closest('tr').querySelector('.total-cell b');
     if (cell) cell.textContent = tot;
     ctx.toast('Stock enregistré');
+    flashOk(inp);
   } else {
     const p = cache.products.find((x) => x.id === pid);
     const v = p.variants.find((x) => x.size === size);
@@ -233,6 +291,7 @@ async function onCellChange(e) {
     v[f] = inp.value === '' ? (f === 'purchase_price_ht' ? null : 0) : +inp.value;
     await db.saveProduct(p);
     ctx.toast('Prix enregistré');
+    flashOk(inp);
   }
 }
 
@@ -244,7 +303,10 @@ function confirmDeleteProduct(pid) {
     <div class="modal-actions"><button class="bo-btn" data-close>Annuler</button>
     <button class="bo-btn danger" id="doDel">Supprimer</button></div>`, (m) => {
     m.querySelector('#doDel').addEventListener('click', async () => {
-      await db.deleteProduct(pid); closeModal(); await reload(); paint(); ctx.toast('Article supprimé');
+      await runAction(m.querySelector('#doDel'), async () => {
+        await db.deleteProduct(pid);
+      });
+      closeModal(); await reload(); paint(); ctx.toast('Article supprimé');
     });
   });
 }
@@ -286,12 +348,84 @@ function openProductModal() {
       if (hasChild) for (const s of SIZE_SYSTEMS[sys]) variants.push(mkVar(s, sys, child, achat));
       const adultSys = hasChild ? 'adulte' : sys;
       for (const s of SIZE_SYSTEMS[adultSys]) variants.push(mkVar(s, adultSys, hasChild ? adult : (adult || child), achat));
-      await db.saveProduct({ id, name, category: m.querySelector('#pCat').value, variants });
+      await runAction(m.querySelector('#pSave'), async () => {
+        await db.saveProduct({ id, name, category: m.querySelector('#pCat').value, variants });
+      });
       closeModal(); await reload(); paint(); ctx.toast('Article créé');
+      flashOk(host.querySelector(`[data-del="${id}"]`)?.closest('tr'));
     });
   });
 }
 const mkVar = (size, size_system, price, achat) => ({ size, size_system, sale_price: price, purchase_price_ht: achat, marking_cost: 0 });
+
+function openCategoriesModal(body) {
+  const paintList = (m) => {
+    const list = cache.categories || [];
+    m.querySelector('#catEditList').innerHTML = list.map((c) => `<li class="cat-edit-row">
+      <input class="bo-input" data-catname="${enc(c)}" value="${escHtml(c)}">
+      <button type="button" class="bo-btn mini" data-catsave="${enc(c)}">Enregistrer</button>
+      <button type="button" class="bo-x" data-catdel="${enc(c)}" title="Supprimer">🗑</button>
+    </li>`).join('') || '<li class="muted">Aucune catégorie</li>';
+    m.querySelectorAll('[data-catsave]').forEach((b) => b.addEventListener('click', async () => {
+      const old = dec(b.dataset.catsave);
+      const input = b.closest('.cat-edit-row')?.querySelector('input');
+      const next = (input?.value || '').trim();
+      if (!next) return ctx.toast('Nom requis');
+      if (next === old) return;
+      try {
+        await runAction(b, async () => {
+          await db.renameCategory(old, next);
+        });
+        cache.categories = await db.getCategories();
+        cache.products = await db.listProducts();
+        paintList(m);
+        drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+        flashOk([...m.querySelectorAll('.cat-edit-row')].find((r) => r.querySelector('input')?.value === next));
+        if (ctx.refreshApp) await ctx.refreshApp();
+        ctx.onChanged && ctx.onChanged();
+        ctx.toast('Catégorie « ' + next + ' »');
+      } catch (e) { ctx.toast(e.message); }
+    }));
+    m.querySelectorAll('[data-catdel]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        await runAction(b, async () => {
+          await db.removeCategory(dec(b.dataset.catdel));
+        });
+        cache.categories = await db.getCategories();
+        paintList(m);
+        drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+        if (ctx.refreshApp) await ctx.refreshApp();
+        ctx.onChanged && ctx.onChanged();
+        ctx.toast('Catégorie supprimée');
+      } catch (e) { ctx.toast(e.message); }
+    }));
+  };
+  openModal(`<h3>Catégories</h3>
+    <p class="muted mini">Renommer une catégorie met à jour tous les articles. On ne peut supprimer que si elle est vide.</p>
+    <ul class="cat-edit-list" id="catEditList"></ul>
+    <div class="reg-actions">
+      <input id="catNew" class="bo-input" placeholder="Nouvelle catégorie">
+      <button type="button" class="bo-btn primary" id="catAdd">＋ Ajouter</button>
+    </div>
+    <div class="modal-actions"><button class="bo-btn" data-close>Fermer</button></div>`, (m) => {
+    paintList(m);
+    m.querySelector('#catAdd').addEventListener('click', async () => {
+      const name = m.querySelector('#catNew').value.trim();
+      if (!name) return ctx.toast('Nom de catégorie requis');
+      await runAction(m.querySelector('#catAdd'), async () => {
+        await db.addCategory(name);
+      });
+      m.querySelector('#catNew').value = '';
+      cache.categories = await db.getCategories();
+      paintList(m);
+      drawCatTable(body, body.querySelector('#boSearch')?.value.toLowerCase() || '');
+      flashOk([...m.querySelectorAll('.cat-edit-row')].find((r) => r.querySelector('input')?.value === name));
+      if (ctx.refreshApp) await ctx.refreshApp();
+      ctx.onChanged && ctx.onChanged();
+      ctx.toast('Catégorie « ' + name + ' » ajoutée');
+    });
+  });
+}
 
 /* ============ HISTORIQUE VENTES ============ */
 let vMode = 'detail';
@@ -352,7 +486,10 @@ function renderVentes(body) {
       `<thead><tr><th>Date</th><th>Match</th><th>Canal</th><th>Paiement</th><th>Articles achetés</th><th>Total</th><th></th></tr></thead>`
       + `<tbody>${rows || '<tr><td colspan="7" class="muted">Aucune vente</td></tr>'}</tbody>`;
     body.querySelectorAll('[data-void]').forEach((b) => b.addEventListener('click', async () => {
-      await db.voidSale(b.dataset.void); cache.sales = await db.allSales(cache.seasonId); cache.stock = await db.stockMap();
+      await db.voidSale(b.dataset.void);
+      cache.sales = await db.allSales(cache.seasonId);
+      cache.stock = await db.stockMap();
+      cache.moves = await db.listStockMoves({ seasonId: cache.seasonId });
       drawDetail(); ctx.toast('Vente annulée, stock rétabli');
     }));
   };
@@ -392,6 +529,151 @@ function renderVentes(body) {
     ctx.toast('Résumé exporté');
   });
   draw();
+}
+
+const LOC_LABEL = { physique: 'Physique', en_ligne: 'En ligne', salarie: 'Salariés', archive: 'Archive', reserve: 'Réserve' };
+const MOVE_REASON_LABEL = db.STOCK_MOVE_REASONS;
+
+/* ============ ENTRÉES / SORTIES ============ */
+function renderMouvements(body) {
+  const initialPid = moveProductFilter;
+  moveProductFilter = '';
+  const productOpts = ['<option value="">Tous les articles</option>']
+    .concat(cache.products.map((p) => `<option value="${p.id}" ${p.id === initialPid ? 'selected' : ''}>${escHtml(p.name)}</option>`)).join('');
+  const reasonOpts = ['<option value="">Tous les motifs</option>']
+    .concat(Object.entries(MOVE_REASON_LABEL).map(([k, l]) => `<option value="${k}">${l}</option>`)).join('');
+  body.innerHTML = `
+    <div class="bo-toolbar">
+      <select id="mProduct" class="bo-input">${productOpts}</select>
+      <select id="mDir" class="bo-input">
+        <option value="">Entrées & sorties</option>
+        <option value="in">Entrées</option>
+        <option value="out">Sorties</option>
+      </select>
+      <select id="mReason" class="bo-input">${reasonOpts}</select>
+      <div class="bo-kpis" id="mKpis"></div>
+      <button id="mAdd" class="bo-btn primary">＋ Entrée / sortie</button>
+    </div>
+    <div class="bo-tablewrap"><table class="bo-table" id="mTable"></table></div>`;
+
+  const filtered = () => {
+    const pid = body.querySelector('#mProduct').value;
+    const dir = body.querySelector('#mDir').value;
+    const reason = body.querySelector('#mReason').value;
+    return (cache.moves || []).filter((m) => {
+      if (pid && m.product_id !== pid) return false;
+      if (dir && m.direction !== dir) return false;
+      if (reason && m.reason !== reason) return false;
+      return true;
+    });
+  };
+
+  const draw = () => {
+    const rows = filtered();
+    const ins = rows.filter((m) => m.direction === 'in' && m.reason !== 'transfert').reduce((a, m) => a + m.qty, 0);
+    const outs = rows.filter((m) => m.direction === 'out' && m.reason !== 'transfert').reduce((a, m) => a + m.qty, 0);
+    body.querySelector('#mKpis').innerHTML =
+      `<span><b>${ins}</b> entrées</span><span><b>${outs}</b> sorties</span><span><b>${ins - outs}</b> solde</span>`;
+    const html = rows.map((m) => {
+      const when = m.created_at ? new Date(m.created_at).toLocaleString('fr-FR') : '—';
+      const badge = m.direction === 'in'
+        ? '<span class="move-badge move-in">Entrée</span>'
+        : '<span class="move-badge move-out">Sortie</span>';
+      const loc = LOC_LABEL[m.location] || m.location;
+      const locTo = m.location_to ? ` → ${LOC_LABEL[m.location_to] || m.location_to}` : '';
+      return `<tr>
+        <td>${when}</td>
+        <td>${badge}</td>
+        <td>${escHtml(m.product_name || m.sku)}</td>
+        <td>${escHtml(m.size || '—')}</td>
+        <td class="num"><b>${m.direction === 'out' ? '−' : '+'}${m.qty}</b></td>
+        <td>${MOVE_REASON_LABEL[m.reason] || m.reason}</td>
+        <td>${loc}${locTo}</td>
+        <td>${escHtml(m.match_label || '—')}</td>
+        <td class="muted">${escHtml(m.note || '')}</td>
+      </tr>`;
+    }).join('');
+    body.querySelector('#mTable').innerHTML =
+      `<thead><tr><th>Date</th><th></th><th>Article</th><th>Taille</th><th class="num">Qté</th><th>Motif</th><th>Emplacement</th><th>Match</th><th>Note</th></tr></thead>`
+      + `<tbody>${html || '<tr><td colspan="9" class="muted">Aucun mouvement. Les ventes, remboursements et réassorts apparaîtront ici.</td></tr>'}</tbody>`;
+  };
+
+  body.querySelector('#mProduct').addEventListener('change', draw);
+  body.querySelector('#mDir').addEventListener('change', draw);
+  body.querySelector('#mReason').addEventListener('change', draw);
+  body.querySelector('#mAdd').addEventListener('click', () => openMoveModal(async () => {
+    cache.moves = await db.listStockMoves({ seasonId: cache.seasonId });
+    cache.stock = await db.stockMap();
+    draw();
+  }));
+  draw();
+}
+
+function openMoveModal(onDone) {
+  const productOpts = cache.products.map((p) => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+  const locOpts = LOCATIONS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  openModal(`<h3>Entrée / sortie</h3>
+    <div class="move-form form-grid">
+      <label class="move-span">Type
+        <select id="mvDir" class="bo-input">
+          <option value="in">Entrée</option>
+          <option value="out">Sortie</option>
+        </select>
+      </label>
+      <label class="move-span">Article
+        <select id="mvProd" class="bo-input">${productOpts}</select>
+      </label>
+      <label>Taille<select id="mvSize" class="bo-input"></select></label>
+      <label>Quantité<input id="mvQty" class="bo-input" type="number" inputmode="numeric" min="1" value="1"></label>
+      <label>Emplacement<select id="mvLoc" class="bo-input">${locOpts}</select></label>
+      <label>Motif<select id="mvReason" class="bo-input">
+        <option value="reassort">Réassort / entrée</option>
+        <option value="remboursement">Remboursement</option>
+        <option value="ajustement">Ajustement / autre</option>
+      </select></label>
+      <label class="move-span">Note<input id="mvNote" class="bo-input" placeholder="optionnel"></label>
+    </div>
+    <p class="muted mini move-hint">Une vente en caisse crée une sortie. Annuler une vente crée une entrée « remboursement ».</p>
+    <div class="modal-actions"><button class="bo-btn" data-close>Annuler</button>
+    <button class="bo-btn primary" id="mvSave">Enregistrer</button></div>`, (m) => {
+    const sheet = m.querySelector('.modal');
+    if (sheet) sheet.classList.add('move-modal');
+    const fillSizes = () => {
+      const p = cache.products.find((x) => x.id === m.querySelector('#mvProd').value);
+      m.querySelector('#mvSize').innerHTML = (p?.variants || []).map((v) =>
+        `<option value="${enc(v.size)}">${escHtml(v.size)}</option>`).join('');
+    };
+    const syncReason = () => {
+      const dir = m.querySelector('#mvDir').value;
+      const reason = m.querySelector('#mvReason');
+      if (dir === 'in' && reason.value === 'ajustement') reason.value = 'reassort';
+      if (dir === 'out') reason.value = 'ajustement';
+    };
+    m.querySelector('#mvProd').addEventListener('change', fillSizes);
+    m.querySelector('#mvDir').addEventListener('change', syncReason);
+    fillSizes();
+    m.querySelector('#mvSave').addEventListener('click', async () => {
+      const pid = m.querySelector('#mvProd').value;
+      const size = dec(m.querySelector('#mvSize').value || '');
+      const qty = +m.querySelector('#mvQty').value;
+      if (!pid || !size || qty <= 0) return ctx.toast('Article, taille et quantité requis');
+      try {
+        await db.applyStockMove({
+          sku: sku(pid, size),
+          direction: m.querySelector('#mvDir').value,
+          qty,
+          location: m.querySelector('#mvLoc').value,
+          reason: m.querySelector('#mvReason').value,
+          note: m.querySelector('#mvNote').value.trim(),
+        });
+        closeModal();
+        if (onDone) await onDone();
+        ctx.toast('Mouvement enregistré, stock mis à jour');
+      } catch (err) {
+        ctx.toast(err.message || 'Erreur');
+      }
+    });
+  });
 }
 
 /* ============ FACTURES & MARQUAGE ============ */
@@ -441,7 +723,7 @@ function renderIO(body) {
     <div class="io-cards">
       <div class="io-card">
         <h3>Exporter</h3>
-        <p class="muted">Classeur Excel complet : catalogue, stock, ventes, factures. Archivage fin de saison et édition hors-ligne.</p>
+        <p class="muted">Classeur Excel complet : catalogue, stock, ventes, mouvements, factures. Archivage fin de saison et édition hors-ligne.</p>
         <button type="button" id="expBtn" class="bo-btn primary">Exporter le classeur (.xlsx)</button>
       </div>
       <div class="io-card io-card-wide">
@@ -905,7 +1187,7 @@ async function applyPdfImport(products) {
     for (const v of raw.variants) {
       const qty = Math.max(0, Math.round(+v.stock_physique || 0));
       if (qty > 0) {
-        await db.setStockValue(sku(id, v.size), 'physique', qty);
+        await db.setStockValue(sku(id, v.size), 'physique', qty, { reason: 'reassort', note: 'Import PDF' });
         stockLines++;
       }
     }
@@ -980,12 +1262,24 @@ async function exportWorkbook() {
   for (const s of state.sales) for (const l of s.lines) venteRows.push({
     Date: s.created_at, Match: s.matchLabel, Canal: s.channel, Paiement: s.payment_method,
     Article: l.name, Taille: l.size, Qté: l.qty, Mode: l.mode, PU: l.unit, Total: l.line_total });
+  const moveRows = (state.stock_moves || []).filter((m) => !m.deleted).map((m) => ({
+    Date: m.created_at,
+    Sens: m.direction === 'in' ? 'Entrée' : 'Sortie',
+    Article: m.product_name,
+    Taille: m.size,
+    Qté: m.qty,
+    Motif: MOVE_REASON_LABEL[m.reason] || m.reason,
+    Emplacement: m.location,
+    Match: m.match_label || '',
+    Note: m.note || '',
+  }));
   const factRows = state.invoices.map((i) => ({ Référence: i.ref, Type: i.type, Montant: +i.amount || 0 }));
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), 'Catalogue');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(stockRows), 'Stock');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(venteRows), 'Ventes');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(moveRows), 'Mouvements');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(factRows), 'Factures');
   XLSX.writeFile(wb, `Boutique_TFHB_${state.season || 'export'}.xlsx`);
   ctx.toast('Classeur exporté');

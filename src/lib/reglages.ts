@@ -2,9 +2,17 @@
 // Écran Réglages (Lot 4) : configuration Supabase + synchronisation + saisons.
 import * as db from './db';
 import * as sync from './sync';
+import { formatMatchDate } from './catalog';
 
 let ctx = { toast: () => {} };
 let pendingLogoMatch = null;
+
+function flashOk(node) {
+  if (!node) return;
+  node.classList.remove('flash-ok');
+  void node.offsetWidth;
+  node.classList.add('flash-ok');
+}
 
 // Redimensionne un logo (garde la transparence -> PNG), max px.
 function resizeLogo(file, max) {
@@ -40,10 +48,10 @@ export async function renderReglages(host, context) {
   <div class="reg">
     <section class="reg-card">
       <h3>Synchronisation multi-poste (Supabase)</h3>
-      <p class="muted">Les données dynamiques (catalogue, stock, ventes, matchs…) sont chargées depuis Supabase.
-      IndexedDB sert de cache hors-ligne. Renseigne l'<b>URL</b> et la <b>clé anon</b> ici ou via <code>.env</code>.
+      <p class="muted">Catalogue, stock, ventes et matchs vivent dans <b>Supabase</b> : l’app les charge au démarrage
+      et enregistre chaque modification tout de suite. Renseigne l'<b>URL</b> et la <b>clé anon</b> ici ou via <code>.env</code>.
       Avant la 1ʳᵉ synchro, exécute <code>supabase-schema.sql</code>
-      (tables <code>products</code>, <code>stock</code>, <code>sales</code>, <code>sale_lines</code>…).</p>
+      (tables <code>products</code>, <code>stock</code>, <code>sales</code>, <code>sale_lines</code>, <code>stock_moves</code>…).</p>
 
       <div class="reg-status">
         <span class="badge ${st.online ? 'ok' : 'off'}">${st.online ? 'En ligne' : 'Hors-ligne'}</span>
@@ -82,7 +90,7 @@ export async function renderReglages(host, context) {
       <p class="muted">Ajoute ou supprime les journées et canaux qui apparaissent dans le sélecteur de match de la caisse.</p>
       <input type="file" id="matchLogoFile" accept="image/*" hidden>
       <div class="bo-tablewrap"><table class="bo-table">
-        <thead><tr><th>Logo</th><th>Code</th><th>Nom</th><th>Type</th><th></th></tr></thead>
+        <thead><tr><th>Logo</th><th>Code</th><th>Nom</th><th>Date</th><th>Type</th><th></th></tr></thead>
         <tbody id="matchRows"></tbody>
       </table></div>
       <div class="reg-actions">
@@ -95,7 +103,7 @@ export async function renderReglages(host, context) {
 
     <section class="reg-card">
       <h3>Catégories d'articles</h3>
-      <p class="muted">Les onglets de la caisse (Maillots, Textiles…). Ajoute une catégorie ; on ne peut supprimer qu'une catégorie sans article.</p>
+      <p class="muted">Onglets de la caisse. Tu peux ajouter, <b>renommer</b> (les articles suivent) ou supprimer une catégorie vide.</p>
       <div class="cat-chips" id="catChips"></div>
       <div class="reg-actions">
         <input id="newCat" class="bo-input" placeholder="Nouvelle catégorie (ex : Goodies)">
@@ -162,12 +170,14 @@ export async function renderReglages(host, context) {
   // --- Matchs ---
   host.querySelector('#matchRows').innerHTML = matches.map((m) => `<tr>
     <td>${m.logo ? `<img class="match-logo" src="${m.logo}" alt="">` : '<span class="match-logo empty"></span>'}</td>
-    <td><b>${m.code || '—'}</b></td><td>${m.label || '—'}</td><td>${CHAN[m.channel] || 'Soir de match'}</td>
+    <td><b>${m.code || '—'}</b></td><td>${m.label || '—'}</td>
+    <td>${formatMatchDate(m.date) || '—'}</td>
+    <td>${CHAN[m.channel] || 'Soir de match'}</td>
     <td class="match-acts">
       <button class="bo-btn mini" data-logo="${m.id}">${m.logo ? 'Changer' : '＋ Logo'}</button>
       ${m.logo ? `<button class="bo-btn mini" data-logodel="${m.id}">Retirer</button>` : ''}
       <button class="bo-x" data-delmatch="${m.id}">🗑</button></td></tr>`).join('')
-    || '<tr><td colspan="5" class="muted">Aucun match</td></tr>';
+    || '<tr><td colspan="6" class="muted">Aucun match</td></tr>';
   host.querySelectorAll('[data-delmatch]').forEach((b) => b.addEventListener('click', async () => {
     await db.deleteMatch(b.dataset.delmatch); ctx.toast('Match supprimé'); ctx.onChanged && ctx.onChanged(); renderReglages(host, ctx);
   }));
@@ -197,12 +207,53 @@ export async function renderReglages(host, context) {
 
   // --- Catégories ---
   host.querySelector('#catChips').innerHTML = categories.map((c) =>
-    `<span class="cat-chip">${c}<button data-delcat="${encodeURIComponent(c)}" title="Supprimer">×</button></span>`).join('');
+    `<span class="cat-chip" data-chip="${encodeURIComponent(c)}">
+      <span class="cat-chip-label">${c}</span>
+      <button type="button" class="cat-ren" data-rencat="${encodeURIComponent(c)}" title="Renommer">✎</button>
+      <button type="button" data-delcat="${encodeURIComponent(c)}" title="Supprimer">×</button>
+    </span>`).join('');
   host.querySelectorAll('[data-delcat]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await db.removeCategory(decodeURIComponent(b.dataset.delcat));
       ctx.toast('Catégorie supprimée'); ctx.onChanged && ctx.onChanged(); renderReglages(host, ctx);
     } catch (e) { ctx.toast(e.message); }
+  }));
+  host.querySelectorAll('[data-rencat]').forEach((b) => b.addEventListener('click', () => {
+    const old = decodeURIComponent(b.dataset.rencat);
+    const chip = b.closest('.cat-chip');
+    const label = chip.querySelector('.cat-chip-label');
+    if (chip.querySelector('input')) return;
+    const input = document.createElement('input');
+    input.className = 'bo-input cat-chip-input';
+    input.value = old;
+    label.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const next = input.value.trim();
+      if (!save || !next || next === old) {
+        renderReglages(host, ctx);
+        return;
+      }
+      try {
+        await db.renameCategory(old, next);
+        ctx.toast('Catégorie « ' + next + ' »');
+        ctx.onChanged && ctx.onChanged();
+        renderReglages(host, ctx);
+        flashOk(host.querySelector(`[data-chip="${encodeURIComponent(next)}"]`));
+      } catch (e) {
+        ctx.toast(e.message);
+        renderReglages(host, ctx);
+      }
+    };
+    input.addEventListener('blur', () => void finish(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); void finish(false); }
+    });
   }));
   host.querySelector('#addCat').addEventListener('click', async () => {
     const name = host.querySelector('#newCat').value.trim();

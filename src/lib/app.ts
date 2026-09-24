@@ -1,6 +1,6 @@
 // @ts-nocheck — logique legacy migrée ; typage progressif
 // Coquille de l'app + écran Caisse (Lot 1). Persistance via db.js.
-import { CATEGORIES, CATEGORY_LABELS, sku } from './catalog';
+import { CATEGORIES, CATEGORY_LABELS, formatMatchDate, sku } from './catalog';
 import * as db from './db';
 import { renderBackoffice } from './backoffice';
 import { renderFinances } from './finances';
@@ -57,8 +57,81 @@ const productById = (id) => state.products.find((p) => p.id === id);
 // ---------- démarrage ----------
 let started = false;
 
+async function hydrateState() {
+  await reloadCore();
+  const savedMatch = await db.kvGet('current_match');
+  state.match = state.matches.find((m) => m.id === savedMatch) || state.matches[0];
+  await refreshStats();
+}
+
+function revealUi() {
+  buildNav();
+  updateNet();
+  window.addEventListener('online', updateNet);
+  window.addEventListener('offline', updateNet);
+  wireOverlays();
+  registerSW();
+  return showCurrentView();
+}
+
+async function applyCloudToUi() {
+  await reloadCore();
+  if (curView !== 'caisse' || !$('catGrid')) return;
+  renderMatchName();
+  renderCat();
+  await refreshStats();
+  renderStats();
+}
+
+function wirePageRetry(fn) {
+  const btn = $('pageRetry');
+  if (btn) btn.addEventListener('click', () => void fn());
+}
+
+let autoStarted = false;
+function ensureAutoSync() {
+  if (autoStarted) return;
+  autoStarted = true;
+  sync.startAuto(async (err, r) => {
+    if (err || r?.skipped) return;
+    await applyCloudToUi();
+    if (r && r.pulled) toast('Données à jour ✓');
+  });
+}
+
+async function loadFromCloud() {
+  showPageLoader('Chargement depuis Supabase…');
+  const configured = await sync.isConfigured();
+  if (!configured) {
+    await hydrateState();
+    await revealUi();
+    ensureAutoSync();
+    toast('Supabase non configuré — ouvre Réglages');
+    if (curView !== 'reglages') await switchView('reglages');
+    return;
+  }
+  if (!navigator.onLine) {
+    showPageError('Connexion internet requise pour charger les données depuis Supabase.');
+    wirePageRetry(loadFromCloud);
+    return;
+  }
+  try {
+    await sync.pullAll({ omitPhotos: true });
+  } catch (e) {
+    console.warn('[boot] pull Supabase', e);
+    showPageError('Impossible de charger les données depuis Supabase.');
+    wirePageRetry(loadFromCloud);
+    return;
+  }
+  await hydrateState();
+  await revealUi();
+  ensureAutoSync();
+  void sync.pullAll({ photosOnly: true }).then(applyCloudToUi).catch((e) => {
+    console.warn('[boot] photos', e);
+  });
+}
+
 export async function boot() {
-  // React Fast Refresh recrée le shell DOM : on ré-affiche sans re-seed
   if (started) {
     await resumeAfterRemount();
     return;
@@ -66,58 +139,13 @@ export async function boot() {
   started = true;
   showPageLoader(VIEW_LOAD_MSG.boot);
 
-  const configured = await sync.isConfigured();
-  if (configured && navigator.onLine) {
-    try {
-      showPageLoader('Chargement depuis Supabase…');
-      const r = await sync.loadDynamicData();
-      if (r.empty) {
-        // Première fois : tables vides → seed local une fois puis push vers Supabase
-        showPageLoader('Initialisation du catalogue…');
-        await db.kvSet('seeded', false);
-        await db.ensureSeeded();
-        await db.ensureMatches();
-        await sync.pushAll();
-        await sync.pullAll();
-        toast('Catalogue initial envoyé vers Supabase');
-      }
-    } catch (e) {
-      console.warn('[boot] pull Supabase échoué, cache local', e);
-      toast('Supabase injoignable — cache local');
-      await db.ensureSeeded();
-      await db.ensureMatches();
-    }
-  } else {
-    // Hors-ligne ou non configuré : seed / cache IndexedDB
-    await db.ensureSeeded();
-    await db.ensureMatches();
-  }
-
-  await db.ensureRemovedProducts();
-  // Toute écriture locale → push différé vers Supabase
-  db.onLocalWrite(() => sync.schedulePush());
-  state.matches = await db.listMatches();
-  state.products = await db.listProducts();
-  state.categories = await db.getCategories();
-  state.photos = await db.photosMap();
-  state.stock = await db.stockMap();
-  const savedMatch = await db.kvGet('current_match');
-  state.match = state.matches.find((m) => m.id === savedMatch) || state.matches[0];
-  await refreshStats();
-  buildNav();
-  updateNet();
-  window.addEventListener('online', updateNet);
-  window.addEventListener('offline', updateNet);
-  wireOverlays();
-  registerSW();
-  await showCurrentView();
-  // Recharge périodique depuis Supabase
-  sync.startAuto(async (err, r) => {
-    if (err) return;
-    await reloadCore();
-    if (curView === 'caisse') { renderCat(); await refreshStats(); renderStats(); }
-    if (r && r.pulled) toast(`Données à jour ✓`);
+  sync.onSyncing((on) => {
+    syncing = on;
+    updateNet();
   });
+  db.onLocalWrite(() => sync.schedulePush());
+
+  await loadFromCloud();
 }
 
 /** Après un remount React (Fast Refresh) : rebrancher le DOM sans reset IndexedDB. */
@@ -147,10 +175,15 @@ async function showCurrentView() {
   }
 }
 
+let syncing = false;
 function updateNet() {
+  const chip = $('netChip');
+  if (!chip) return;
   const on = navigator.onLine;
-  $('netChip').classList.toggle('online', on);
-  $('netTxt').textContent = on ? 'En ligne' : 'Hors-ligne';
+  chip.classList.toggle('online', on && !syncing);
+  chip.classList.toggle('syncing', !!syncing);
+  const txt = $('netTxt');
+  if (txt) txt.textContent = syncing ? 'Synchro…' : (on ? 'En ligne' : 'Hors-ligne');
 }
 
 // ---------- navigation ----------
@@ -209,19 +242,32 @@ async function switchView(view) {
 
 // recharge les données cœur après une synchro / changement de saison
 async function reloadCore() {
-  state.products = await db.listProducts();
-  state.matches = await db.listMatches();
-  state.categories = await db.getCategories();
-  state.photos = await db.photosMap();
-  state.stock = await db.stockMap();
+  const [products, matches, categories, photos, stock] = await Promise.all([
+    db.listProducts(),
+    db.listMatches(),
+    db.getCategories(),
+    db.photosMap(),
+    db.stockMap(),
+  ]);
+  state.products = products;
+  state.matches = matches;
+  state.categories = categories;
+  state.photos = photos;
+  state.stock = stock;
   state.match = state.matches.find((m) => m.id === state.match?.id) || state.matches[0];
 }
 
 // ---------- écran Caisse ----------
-function renderCaisse() {
-  $('matchName').innerHTML = state.match
+function renderMatchName() {
+  const el = $('matchName');
+  if (!el) return;
+  el.innerHTML = state.match
     ? `${state.match.logo ? `<img class="match-logo sm" src="${state.match.logo}" alt="">` : ''}${state.match.code} ${state.match.label}`
     : '—';
+}
+
+function renderCaisse() {
+  renderMatchName();
   $('view').innerHTML = `
     <div class="grid">
       <section class="panel">
@@ -416,6 +462,10 @@ async function confirmPay() {
 }
 
 async function refreshStats() {
+  if (!state.match) {
+    state.matchStats = { ventes: 0, nb: 0, com: 0 };
+    return;
+  }
   const sales = await db.salesForMatch(state.match.id);
   state.matchStats = {
     ventes: sales.reduce((a, s) => a + s.total, 0),
@@ -474,11 +524,14 @@ function wireOverlays() {
   });
 }
 function openMatchPicker() {
-  $('matchList').innerHTML = state.matches.map((m) =>
-    `<button data-id="${m.id}" class="${m.id === state.match.id ? 'on' : ''}">
+  $('matchList').innerHTML = state.matches.map((m) => {
+    const when = formatMatchDate(m.date);
+    const kind = m.channel === 'en_ligne' ? 'Boutique en ligne' : m.channel === 'salarie' ? 'Salariés · prix libre' : 'Soir de match';
+    return `<button data-id="${m.id}" class="${m.id === state.match?.id ? 'on' : ''}">
       ${m.logo ? `<img class="match-logo" src="${m.logo}" alt="">` : ''}
       <span>${m.code} ${m.label}
-      <small>${m.channel === 'en_ligne' ? 'Boutique en ligne' : m.channel === 'salarie' ? 'Salariés · prix libre' : 'Soir de match'}</small></span></button>`).join('');
+      <small>${when ? when + ' · ' : ''}${kind}</small></span></button>`;
+  }).join('');
   $('matchList').querySelectorAll('button').forEach((b) => b.addEventListener('click', async () => {
     state.match = state.matches.find((m) => m.id === b.dataset.id);
     await db.kvSet('current_match', state.match.id);
@@ -494,7 +547,24 @@ function openMatchPicker() {
 
 // ----- toast -----
 let tt;
-function toast(m) { const t = $('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('on'), 1500); }
+function toast(m, kind = 'ok') {
+  const t = $('toast');
+  if (!t) return;
+  const isErr = kind === 'err' || /erreur|invalide|requis|impossible|échec/i.test(String(m || ''));
+  t.className = 'toast';
+  t.replaceChildren();
+  const ico = document.createElement('span');
+  ico.className = 'toast-ico';
+  ico.setAttribute('aria-hidden', 'true');
+  ico.textContent = isErr ? '!' : '✓';
+  const txt = document.createElement('span');
+  txt.textContent = m;
+  t.append(ico, txt);
+  void t.offsetWidth;
+  t.classList.add('on', isErr ? 'err' : 'ok');
+  clearTimeout(tt);
+  tt = setTimeout(() => t.classList.remove('on', 'ok', 'err'), 2800);
+}
 
 // ----- service worker -----
 async function registerSW() {
