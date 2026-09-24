@@ -322,13 +322,15 @@ function renderCart() {
   const salChan = !!(state.match && state.match.channel === 'salarie');
   if (!state.cart.length) { box.innerHTML = '<div class="empty">Touchez un article pour commencer</div>'; }
   else box.innerHTML = state.cart.map((l) => {
-    const raw = l.unit * l.qty, t = lineTotal(l), strike = l.mode !== 'plein' && !salChan;
+    const raw = l.unit * l.qty, t = lineTotal(l), strike = t !== raw;
     const meta = `${l.size}` + (salChan ? ' · prix salarié' : ` · ${eur(l.unit)}`) +
-      (l.mode === 'abonne' ? ' · −20%' : '') + (l.mode === 'com' ? ' · dotation' : '');
+      (l.mode === 'abonne' ? ' · −20%' : '') + (l.mode === 'com' ? ' · dotation' : '') +
+      (l.mode === 'special' ? ' · demande spéciale' : '');
     const controls = salChan
       ? `<label class="ln-price">Prix <input data-price="${l.id}" type="number" step="0.5" min="0" value="${l.unit}"> €</label>`
       : `<button class="pill ab ${l.mode === 'abonne' ? 'on' : ''}" data-a="abonne">Abonné</button>
-         <button class="pill sa ${l.mode === 'salarie' ? 'on' : ''}" data-a="salarie">Salarié</button>`;
+         <button class="pill sa ${l.mode === 'special' ? 'on' : ''}" data-a="special">Demande spéciale</button>
+         ${l.mode === 'special' ? `<label class="ln-price">Prix <input data-price="${l.id}" type="number" step="0.5" min="0" value="${l.unit}"> €</label>` : ''}`;
     return `<div class="ln ${l.mode === 'com' ? 'com' : ''}" data-id="${l.id}">
       <div class="r1"><div><div class="nm">${l.name}</div><div class="meta">${meta}</div></div>
         <div style="text-align:right">${strike ? `<div class="tot strike">${eur(raw)}</div>` : ''}<div class="tot">${eur(t)}</div></div></div>
@@ -345,7 +347,10 @@ function renderCart() {
   });
   box.querySelectorAll('input[data-price]').forEach((inp) => inp.addEventListener('change', () => {
     const l = state.cart.find((x) => x.id === +inp.dataset.price);
-    if (l) { l.unit = Math.max(0, +inp.value || 0); l.mode = 'plein'; renderCart(); }
+    if (!l) return;
+    l.unit = Math.max(0, +inp.value || 0);
+    if (salChan) l.mode = 'plein'; // canal Salariés : pas de mode dédié, juste le prix libre
+    renderCart();
   }));
   const tot = state.cart.reduce((a, l) => a + lineTotal(l), 0);
   const n = state.cart.reduce((a, l) => a + l.qty, 0);
@@ -360,7 +365,7 @@ function lineAction(id, a) {
   if (a === 'inc') l.qty++;
   else if (a === 'dec') { l.qty--; if (l.qty <= 0) state.cart = state.cart.filter((x) => x.id !== id); }
   else if (a === 'rm') state.cart = state.cart.filter((x) => x.id !== id);
-  else l.mode = l.mode === a ? 'plein' : a; // abonne/salarie/com toggle
+  else l.mode = l.mode === a ? 'plein' : a; // abonne/special/com toggle
   renderCart();
 }
 function undo() {

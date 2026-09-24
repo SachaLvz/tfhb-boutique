@@ -17,6 +17,7 @@ const eur = (v) => (Math.round((v || 0) * 100) / 100).toLocaleString('fr-FR') + 
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
 const LOCATIONS = [['physique', 'Physique'], ['en_ligne', 'En ligne'], ['salarie', 'Salariés'], ['archive', 'Archive']];
 const PAY = { espece: 'Espèces', cb: 'CB', cheque: 'Chèque' };
+const LINE_MODES = { abonne: 'Abonné', com: 'Imput. com', special: 'Demande spéciale' };
 
 let ctx = { toast: () => {} };
 let host = null;
@@ -340,7 +341,7 @@ function renderVentes(body) {
     drawKpis(sales);
     const rows = sales.map((s) => {
       const detail = s.lines.map((l) =>
-        `<div class="sale-item"><b>${l.qty}×</b> ${l.name} <span class="sz-badge">${l.size}</span>${l.mode !== 'plein' ? ` <span class="muted">(${l.mode})</span>` : ''} <span class="muted">— ${eur(l.line_total)}</span></div>`).join('');
+        `<div class="sale-item"><b>${l.qty}×</b> ${l.name} <span class="sz-badge">${l.size}</span>${l.mode !== 'plein' ? ` <span class="muted">(${LINE_MODES[l.mode] || l.mode})</span>` : ''} <span class="muted">— ${eur(l.line_total)}</span></div>`).join('');
       return `<tr>
         <td>${s.created_at ? new Date(s.created_at).toLocaleString('fr-FR') : '—'}</td>
         <td>${s.matchLabel || '—'}</td><td>${chanLabel(s.channel)}</td><td>${PAY[s.payment_method] || '—'}</td>
