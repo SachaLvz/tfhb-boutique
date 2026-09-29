@@ -284,13 +284,13 @@ export async function stockMap() {
   for (const s of all) if (!s.deleted) m[s.sku] = s;
   return m;
 }
-export async function adjustStock(skuId, location, delta) {
+export async function adjustStock(skuId, location, delta, { silent = false } = {}) {
   const os = await tx('stock', 'readwrite');
   const rec = (await done(os.get(skuId))) || { sku: skuId, physique: 0, reserve: 0, en_ligne: 0, archive: 0 };
   rec[location] = (rec[location] || 0) + delta;
   rec.updated_at = now();
   await done(os.put(rec));
-  await touch();
+  if (!silent) await touch();
   return rec;
 }
 
@@ -313,7 +313,7 @@ async function skuMeta(skuId) {
 }
 
 /** Journal d'entrées / sorties (vente, remboursement, réassort, ajustement…). */
-export async function recordStockMoves(entries) {
+export async function recordStockMoves(entries, { silent = false } = {}) {
   if (!entries?.length) return [];
   const season_id = await kvGet('active_season', null);
   const recs = [];
@@ -345,7 +345,9 @@ export async function recordStockMoves(entries) {
   }
   if (!recs.length) return [];
   await putMany('stock_moves', recs);
-  for (const rec of recs) await logChange('stock_move', rec);
+  // un seul push pour tout le lot, pas un par ligne
+  for (const rec of recs) await logChange('stock_move', rec, { silent: true });
+  if (!silent) await touch();
   return recs;
 }
 
@@ -391,8 +393,9 @@ export async function ensureCatalog() {
     await putMany('products', toPut);
     for (const rec of toPut) {
       byId.set(rec.id, rec);
-      await logChange('product', rec);
+      await logChange('product', rec, { silent: true });
     }
+    await touch();
   }
 
   const stockRows = await getAll('stock');
@@ -493,7 +496,8 @@ export async function ensureMatches() {
   }
   if (!toPut.length) return;
   await putMany('matches', toPut);
-  for (const rec of toPut) await logChange('match', rec);
+  for (const rec of toPut) await logChange('match', rec, { silent: true });
+  await touch();
 }
 
 // --- ventes ---
@@ -503,7 +507,7 @@ export async function recordSale(sale) {
   await putMany('sales', [rec]);
   // décrément du stock (emplacement selon canal)
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
-  for (const l of sale.lines) await adjustStock(l.sku, loc, -l.qty);
+  for (const l of sale.lines) await adjustStock(l.sku, loc, -l.qty, { silent: true });
   await recordStockMoves((sale.lines || []).map((l) => ({
     sku: l.sku,
     product_name: l.name,
@@ -515,8 +519,10 @@ export async function recordSale(sale) {
     sale_id: rec.id,
     match_id: sale.matchId || null,
     match_label: sale.matchLabel || '',
-  })));
-  await touch();
+  })), { silent: true });
+  // la vente est déjà actée en local (IndexedDB) ; le push Supabase part en
+  // tâche de fond pour ne pas faire attendre la caisse sur le réseau
+  void touch();
   return rec;
 }
 export async function salesForMatch(matchId) {
@@ -616,9 +622,10 @@ export async function clearAllStock() {
   }
   if (updated.length) {
     await putMany('stock', updated);
-    for (const rec of updated) await logChange('stock', rec);
+    for (const rec of updated) await logChange('stock', rec, { silent: true });
   }
-  if (moves.length) await recordStockMoves(moves);
+  if (moves.length) await recordStockMoves(moves, { silent: true });
+  await touch();
   return cleared;
 }
 export async function transferStock(skuId, from, to, qty) {
@@ -665,7 +672,7 @@ export async function voidSale(saleId) {
   const sale = await getOne('sales', saleId);
   if (!sale || sale.deleted) return;
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
-  for (const l of sale.lines) await adjustStock(l.sku, loc, +l.qty);
+  for (const l of sale.lines) await adjustStock(l.sku, loc, +l.qty, { silent: true });
   await recordStockMoves((sale.lines || []).map((l) => ({
     sku: l.sku,
     product_name: l.name,
@@ -678,15 +685,15 @@ export async function voidSale(saleId) {
     match_id: sale.matchId || null,
     match_label: sale.matchLabel || '',
     note: 'Annulation de vente',
-  })));
+  })), { silent: true });
   sale.deleted = true; sale.updated_at = now();
   await putMany('sales', [sale]);
   await logChange('sale', sale);
 }
 
-async function logChange(type, payload) {
+async function logChange(type, payload, { silent = false } = {}) {
   await done((await tx('outbox', 'readwrite')).add({ type, payload, at: now() }));
-  await touch();
+  if (!silent) await touch();
 }
 
 // --- export / import complet (round-trip Excel hors-ligne) ---
