@@ -82,6 +82,14 @@ export default function CaisseApp() {
             </div>
             <p className="pay-sub">Moyen de paiement</p>
             <div className="pay-methods" id="payMethods" />
+            <label className="pay-sub" htmlFor="saleComment">
+              Commentaire (optionnel)
+            </label>
+            <input
+              id="saleComment"
+              className="bo-input"
+              placeholder="Ex : remise accordée, échange prévu…"
+            />
             <label className="receipt">
               <input type="checkbox" id="wantReceipt" /> Générer un reçu (PDF)
             </label>

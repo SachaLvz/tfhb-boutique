@@ -435,6 +435,7 @@ function openPay() {
     $('payMethods').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
   }));
   $('wantReceipt').checked = false;
+  $('saleComment').value = '';
   $('payPendingForm').hidden = true;
   $('pendingReason').value = '';
   $('payOv').classList.add('on');
@@ -448,6 +449,7 @@ async function confirmPay() {
     channel: state.match.channel,
     payment_method: state.payMethod,
     payment_status: 'paid',
+    comment: $('saleComment').value.trim(),
     total: tot, com_total: com,
     lines: state.cart.map((l) => ({ sku: l.sku, name: l.name, size: l.size, qty: l.qty, unit: l.unit, mode: l.mode, line_total: lineTotal(l) })),
   };
@@ -475,6 +477,7 @@ async function confirmPending() {
     payment_method: null,
     payment_status: 'pending',
     pending_reason: reason,
+    comment: $('saleComment').value.trim(),
     total: tot, com_total: com,
     lines: state.cart.map((l) => ({ sku: l.sku, name: l.name, size: l.size, qty: l.qty, unit: l.unit, mode: l.mode, line_total: lineTotal(l) })),
   };
