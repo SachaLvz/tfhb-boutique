@@ -105,6 +105,7 @@ create table public.sales (
   payment_status  text not null default 'paid'
                   check (payment_status in ('paid', 'pending')),
   pending_reason  text,
+  comment         text,
   total           numeric(12,2) not null default 0,
   com_total       numeric(12,2) not null default 0,
   deleted         boolean not null default false,

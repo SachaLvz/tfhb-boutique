@@ -438,6 +438,32 @@ function openCategoriesModal(body) {
 
 /* ============ HISTORIQUE VENTES ============ */
 let vMode = 'detail';
+
+function commentCell(s) {
+  const text = (s.comment || '').trim();
+  const label = text ? (text.length > 28 ? text.slice(0, 28) + '…' : text) : '+ Commentaire';
+  return `<button type="button" class="bo-btn mini sale-comment-btn ${text ? '' : 'empty'}" data-comment="${s.id}"
+    title="${text ? escHtml(text) : 'Ajouter un commentaire'}">${text ? '💬 ' : ''}${escHtml(label)}</button>`;
+}
+
+function openCommentModal(saleId, onDone) {
+  const sale = cache.sales.find((s) => s.id === saleId);
+  if (!sale) return;
+  openModal(`<h3>Commentaire</h3>
+    <p class="muted mini">${escHtml(sale.matchLabel || '—')} · ${eur(sale.total)}</p>
+    <textarea id="cmText" class="bo-input" rows="3" placeholder="Ex : échange de taille prévu, remise accordée par le bureau…">${escHtml(sale.comment || '')}</textarea>
+    <div class="modal-actions"><button class="bo-btn" data-close>Annuler</button>
+    <button class="bo-btn primary" id="cmSave">Enregistrer</button></div>`, (m) => {
+    m.querySelector('#cmSave').addEventListener('click', async () => {
+      const text = m.querySelector('#cmText').value.trim();
+      await db.setSaleComment(saleId, text);
+      cache.sales = await db.allSales(cache.seasonId);
+      closeModal();
+      await onDone();
+    });
+  });
+}
+
 function renderVentes(body) {
   const matchOpts = ['<option value="">Tous les matchs</option>']
     .concat(cache.matches.map((m) => `<option value="${m.id}">${m.code} ${m.label}</option>`)).join('');
@@ -489,17 +515,21 @@ function renderVentes(body) {
         <td>${s.created_at ? new Date(s.created_at).toLocaleString('fr-FR') : '—'}</td>
         <td>${s.matchLabel || '—'}</td><td>${chanLabel(s.channel)}</td><td>${PAY[s.payment_method] || '—'}</td>
         <td>${detail}</td><td class="num">${eur(s.total)}</td>
+        <td>${commentCell(s)}</td>
         <td><button class="bo-x" data-void="${s.id}" title="Annuler la vente (remet le stock)">Annuler</button></td></tr>`;
     }).join('');
     body.querySelector('#vTable').innerHTML =
-      `<thead><tr><th>Date</th><th>Match</th><th>Canal</th><th>Paiement</th><th>Articles achetés</th><th>Total</th><th></th></tr></thead>`
-      + `<tbody>${rows || '<tr><td colspan="7" class="muted">Aucune vente</td></tr>'}</tbody>`;
+      `<thead><tr><th>Date</th><th>Match</th><th>Canal</th><th>Paiement</th><th>Articles achetés</th><th>Total</th><th>Commentaire</th><th></th></tr></thead>`
+      + `<tbody>${rows || '<tr><td colspan="8" class="muted">Aucune vente</td></tr>'}</tbody>`;
     body.querySelectorAll('[data-void]').forEach((b) => b.addEventListener('click', async () => {
       await db.voidSale(b.dataset.void);
       cache.sales = await db.allSales(cache.seasonId);
       cache.stock = await db.stockMap();
       cache.moves = await db.listStockMoves({ seasonId: cache.seasonId });
       drawDetail(); ctx.toast('Vente annulée, stock rétabli');
+    }));
+    body.querySelectorAll('[data-comment]').forEach((b) => b.addEventListener('click', () => {
+      openCommentModal(b.dataset.comment, async () => { drawDetail(); ctx.toast('Commentaire enregistré'); });
     }));
   };
 
@@ -568,15 +598,19 @@ function renderAttente(body) {
         <td>${s.matchLabel || '—'}</td><td>${chanLabel(s.channel)}</td>
         <td>${detail}</td><td class="num">${eur(s.total)}</td>
         <td>${escHtml(s.pending_reason || '—')}</td>
+        <td>${commentCell(s)}</td>
         <td class="att-acts">
           <button class="bo-btn primary mini" data-close="${s.id}">Clore</button>
           <button class="bo-x" data-void="${s.id}" title="Annuler (remet le stock)">Annuler</button>
         </td></tr>`;
     }).join('');
     body.querySelector('#attTable').innerHTML =
-      `<thead><tr><th>Date</th><th>Match</th><th>Canal</th><th>Articles</th><th>Total</th><th>Raison</th><th></th></tr></thead>`
-      + `<tbody>${rows || '<tr><td colspan="7" class="muted">Aucun paiement en attente</td></tr>'}</tbody>`;
+      `<thead><tr><th>Date</th><th>Match</th><th>Canal</th><th>Articles</th><th>Total</th><th>Raison</th><th>Commentaire</th><th></th></tr></thead>`
+      + `<tbody>${rows || '<tr><td colspan="8" class="muted">Aucun paiement en attente</td></tr>'}</tbody>`;
 
+    body.querySelectorAll('[data-comment]').forEach((b) => b.addEventListener('click', () => {
+      openCommentModal(b.dataset.comment, async () => { draw(); ctx.toast('Commentaire enregistré'); });
+    }));
     body.querySelectorAll('[data-void]').forEach((b) => b.addEventListener('click', async () => {
       await db.voidSale(b.dataset.void);
       cache.sales = await db.allSales(cache.seasonId);
@@ -1352,7 +1386,8 @@ async function exportWorkbook() {
   const venteRows = [];
   for (const s of state.sales) for (const l of s.lines) venteRows.push({
     Date: s.created_at, Match: s.matchLabel, Canal: s.channel, Paiement: s.payment_method,
-    Article: l.name, Taille: l.size, Qté: l.qty, Mode: l.mode, PU: l.unit, Total: l.line_total });
+    Article: l.name, Taille: l.size, Qté: l.qty, Mode: l.mode, PU: l.unit, Total: l.line_total,
+    Commentaire: s.comment || '' });
   const moveRows = (state.stock_moves || []).filter((m) => !m.deleted).map((m) => ({
     Date: m.created_at,
     Sens: m.direction === 'in' ? 'Entrée' : 'Sortie',

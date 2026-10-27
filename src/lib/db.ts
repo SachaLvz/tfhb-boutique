@@ -547,6 +547,17 @@ export async function closeSale(saleId, paymentMethod) {
   return sale;
 }
 
+/** Ajoute ou modifie le commentaire libre d'une vente (quel que soit son statut). */
+export async function setSaleComment(saleId, comment) {
+  const sale = await getOne('sales', saleId);
+  if (!sale || sale.deleted) return;
+  sale.comment = (comment || '').trim();
+  sale.updated_at = now();
+  await putMany('sales', [sale]);
+  await logChange('sale', sale);
+  return sale;
+}
+
 // ===================== BACK-OFFICE (Lot 2) =====================
 
 // --- produits / variantes ---
