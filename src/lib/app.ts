@@ -435,6 +435,8 @@ function openPay() {
     $('payMethods').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
   }));
   $('wantReceipt').checked = false;
+  $('payPendingForm').hidden = true;
+  $('pendingReason').value = '';
   $('payOv').classList.add('on');
 }
 async function confirmPay() {
@@ -445,6 +447,7 @@ async function confirmPay() {
     matchLabel: `${state.match.code} ${state.match.label}`,
     channel: state.match.channel,
     payment_method: state.payMethod,
+    payment_status: 'paid',
     total: tot, com_total: com,
     lines: state.cart.map((l) => ({ sku: l.sku, name: l.name, size: l.size, qty: l.qty, unit: l.unit, mode: l.mode, line_total: lineTotal(l) })),
   };
@@ -460,13 +463,38 @@ async function confirmPay() {
   toast('Vente enregistrée ✓ stock mis à jour');
   if (wantReceipt) printReceipt(rec);
 }
+async function confirmPending() {
+  const reason = $('pendingReason').value.trim();
+  if (!reason) return toast('Indique une raison pour le paiement en attente');
+  const tot = state.cart.reduce((a, l) => a + lineTotal(l), 0);
+  const com = state.cart.reduce((a, l) => a + (l.mode === 'com' ? l.unit * l.qty : 0), 0);
+  const sale = {
+    matchId: state.match.id,
+    matchLabel: `${state.match.code} ${state.match.label}`,
+    channel: state.match.channel,
+    payment_method: null,
+    payment_status: 'pending',
+    pending_reason: reason,
+    total: tot, com_total: com,
+    lines: state.cart.map((l) => ({ sku: l.sku, name: l.name, size: l.size, qty: l.qty, unit: l.unit, mode: l.mode, line_total: lineTotal(l) })),
+  };
+  await db.recordSale(sale);
+  // maj stock en mémoire : l'article part du stock même si le paiement est différé
+  const loc = state.match.channel === 'en_ligne' ? 'en_ligne' : 'physique';
+  for (const l of state.cart) { const s = state.stock[l.sku]; if (s) s[loc] = (s[loc] || 0) - l.qty; }
+  state.cart = [];
+  $('payOv').classList.remove('on');
+  await refreshStats();
+  renderCart(); renderCat(); renderStats();
+  toast('Vente mise en attente — à clôturer dans le Back-office');
+}
 
 async function refreshStats() {
   if (!state.match) {
     state.matchStats = { ventes: 0, nb: 0, com: 0 };
     return;
   }
-  const sales = await db.salesForMatch(state.match.id);
+  const sales = (await db.salesForMatch(state.match.id)).filter((s) => s.payment_status !== 'pending');
   state.matchStats = {
     ventes: sales.reduce((a, s) => a + s.total, 0),
     nb: sales.length,
@@ -508,13 +536,17 @@ function wireOverlays() {
   const ovClose = $('ovClose');
   const payClose = $('payClose');
   const payConfirm = $('payConfirm');
+  const payPendingToggle = $('payPendingToggle');
+  const payPendingConfirm = $('payPendingConfirm');
   const matchClose = $('matchClose');
   const matchBtn = $('matchBtn');
-  if (!ovClose || !payClose || !payConfirm || !matchClose || !matchBtn) return;
+  if (!ovClose || !payClose || !payConfirm || !payPendingToggle || !payPendingConfirm || !matchClose || !matchBtn) return;
 
   ovClose.onclick = () => $('ov').classList.remove('on');
   payClose.onclick = () => $('payOv').classList.remove('on');
   payConfirm.onclick = () => { void confirmPay(); };
+  payPendingToggle.onclick = () => { $('payPendingForm').hidden = !$('payPendingForm').hidden; };
+  payPendingConfirm.onclick = () => { void confirmPending(); };
   matchClose.onclick = () => $('matchOv').classList.remove('on');
   matchBtn.onclick = () => { void openMatchPicker(); };
   ['ov', 'payOv', 'matchOv'].forEach((id) => {

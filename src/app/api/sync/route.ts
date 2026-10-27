@@ -146,13 +146,16 @@ function mapMatch(m: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapSale(s: any) {
+  const status = s.payment_status === "pending" ? "pending" : "paid";
   return {
     id: s.id,
     season_id: s.season_id || null,
     match_id: s.matchId || null,
     match_label: s.matchLabel || null,
     channel: s.channel || "physique",
-    payment_method: s.payment_method || "espece",
+    payment_method: s.payment_method || (status === "pending" ? null : "espece"),
+    payment_status: status,
+    pending_reason: s.pending_reason || null,
     total: s.total || 0,
     com_total: s.com_total || 0,
     deleted: !!s.deleted,
@@ -306,7 +309,9 @@ function fromSale(r: any, lines: any[]) {
     matchId: r.match_id || null,
     matchLabel: r.match_label || "",
     channel: r.channel || "physique",
-    payment_method: r.payment_method || "espece",
+    payment_method: r.payment_method || null,
+    payment_status: r.payment_status === "pending" ? "pending" : "paid",
+    pending_reason: r.pending_reason || null,
     total: Number(r.total) || 0,
     com_total: Number(r.com_total) || 0,
     lines: (lines || []).map((l: any) => ({

@@ -100,8 +100,11 @@ create table public.sales (
   match_id        text references public.matches(id),
   match_label     text,
   channel         text not null default 'physique',
-  payment_method  text not null default 'espece'
-                  check (payment_method in ('espece', 'cb', 'cheque')),
+  payment_method  text
+                  check (payment_method is null or payment_method in ('espece', 'cb', 'cheque')),
+  payment_status  text not null default 'paid'
+                  check (payment_status in ('paid', 'pending')),
+  pending_reason  text,
   total           numeric(12,2) not null default 0,
   com_total       numeric(12,2) not null default 0,
   deleted         boolean not null default false,
@@ -121,7 +124,7 @@ create table public.sale_lines (
   qty         integer not null check (qty > 0),
   unit        numeric(12,2) not null default 0,
   mode        text not null default 'plein'
-              check (mode in ('plein', 'abonne', 'salarie', 'com')),
+              check (mode in ('plein', 'abonne', 'salarie', 'special', 'com')),
   line_total  numeric(12,2) not null default 0
 );
 

@@ -82,15 +82,22 @@ async function reload() {
 const SUBS = [
   ['catalogue', 'Catalogue & Stock'],
   ['ventes', 'Historique ventes'],
+  ['attente', 'Paiements en attente'],
   ['mouvements', 'Entrées / Sorties'],
   ['factures', 'Factures & Marquage'],
   ['io', 'Import / Export'],
 ];
 
+function tabLabel(id, label) {
+  if (id !== 'attente') return label;
+  const n = cache.sales.filter((s) => s.payment_status === 'pending').length;
+  return n ? `${label} <span class="bo-badge">${n}</span>` : label;
+}
+
 function paint() {
   host.innerHTML = '';
   const wrap = el(`<div class="bo">
-    <div class="bo-tabs">${SUBS.map(([id, l]) => `<button data-s="${id}" class="${id === sub ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="bo-tabs">${SUBS.map(([id, l]) => `<button data-s="${id}" class="${id === sub ? 'on' : ''}">${tabLabel(id, l)}</button>`).join('')}</div>
     <div class="bo-body" id="boBody"></div>
   </div>`);
   host.appendChild(wrap);
@@ -108,6 +115,7 @@ function paint() {
     body.innerHTML = '';
     if (sub === 'catalogue') renderCatalogue(body);
     else if (sub === 'ventes') renderVentes(body);
+    else if (sub === 'attente') renderAttente(body);
     else if (sub === 'mouvements') renderMouvements(body);
     else if (sub === 'factures') renderFactures(body);
     else renderIO(body);
@@ -115,6 +123,7 @@ function paint() {
   const body = wrap.querySelector('#boBody');
   if (sub === 'catalogue') renderCatalogue(body);
   else if (sub === 'ventes') renderVentes(body);
+  else if (sub === 'attente') renderAttente(body);
   else if (sub === 'mouvements') renderMouvements(body);
   else if (sub === 'factures') renderFactures(body);
   else renderIO(body);
@@ -447,7 +456,7 @@ function renderVentes(body) {
 
   const getSales = () => {
     const mid = body.querySelector('#vMatch').value;
-    let sales = cache.sales.slice();
+    let sales = cache.sales.filter((s) => s.payment_status !== 'pending');
     if (mid) sales = sales.filter((s) => s.matchId === mid);
     return sales;
   };
@@ -529,6 +538,88 @@ function renderVentes(body) {
     ctx.toast('Résumé exporté');
   });
   draw();
+}
+
+/* ============ PAIEMENTS EN ATTENTE ============ */
+function renderAttente(body) {
+  const chanLabel = (c) => c === 'en_ligne' ? 'En ligne' : c === 'salarie' ? 'Salariés' : 'Physique';
+  const refreshTabBadge = () => {
+    const tabBtn = document.querySelector('.bo-tabs button[data-s="attente"]');
+    if (tabBtn) tabBtn.innerHTML = tabLabel('attente', 'Paiements en attente');
+  };
+
+  const draw = () => {
+    const pending = cache.sales
+      .filter((s) => s.payment_status === 'pending')
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const total = pending.reduce((a, s) => a + s.total, 0);
+
+    body.innerHTML = `
+      <div class="bo-toolbar">
+        <div class="bo-kpis"><span><b>${pending.length}</b> en attente</span><span><b>${eur(total)}</b> à encaisser</span></div>
+      </div>
+      <div class="bo-tablewrap"><table class="bo-table" id="attTable"></table></div>`;
+
+    const rows = pending.map((s) => {
+      const detail = s.lines.map((l) =>
+        `<div class="sale-item"><b>${l.qty}×</b> ${l.name} <span class="sz-badge">${l.size}</span> <span class="muted">— ${eur(l.line_total)}</span></div>`).join('');
+      return `<tr>
+        <td>${s.created_at ? new Date(s.created_at).toLocaleString('fr-FR') : '—'}</td>
+        <td>${s.matchLabel || '—'}</td><td>${chanLabel(s.channel)}</td>
+        <td>${detail}</td><td class="num">${eur(s.total)}</td>
+        <td>${escHtml(s.pending_reason || '—')}</td>
+        <td class="att-acts">
+          <button class="bo-btn primary mini" data-close="${s.id}">Clore</button>
+          <button class="bo-x" data-void="${s.id}" title="Annuler (remet le stock)">Annuler</button>
+        </td></tr>`;
+    }).join('');
+    body.querySelector('#attTable').innerHTML =
+      `<thead><tr><th>Date</th><th>Match</th><th>Canal</th><th>Articles</th><th>Total</th><th>Raison</th><th></th></tr></thead>`
+      + `<tbody>${rows || '<tr><td colspan="7" class="muted">Aucun paiement en attente</td></tr>'}</tbody>`;
+
+    body.querySelectorAll('[data-void]').forEach((b) => b.addEventListener('click', async () => {
+      await db.voidSale(b.dataset.void);
+      cache.sales = await db.allSales(cache.seasonId);
+      cache.stock = await db.stockMap();
+      cache.moves = await db.listStockMoves({ seasonId: cache.seasonId });
+      draw();
+      refreshTabBadge();
+      ctx.toast('Paiement en attente annulé, stock rétabli');
+    }));
+    body.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => {
+      openCloseSaleModal(b.dataset.close, async () => {
+        cache.sales = await db.allSales(cache.seasonId);
+        draw();
+        refreshTabBadge();
+        ctx.toast('Paiement clôturé ✓');
+      });
+    }));
+  };
+  draw();
+}
+
+function openCloseSaleModal(saleId, onDone) {
+  const sale = cache.sales.find((s) => s.id === saleId);
+  if (!sale) return;
+  openModal(`<h3>Clôturer le paiement</h3>
+    <p class="muted mini">${escHtml(sale.matchLabel || '—')} · ${eur(sale.total)}${sale.pending_reason ? ' · Raison : ' + escHtml(sale.pending_reason) : ''}</p>
+    <p class="pay-sub">Moyen de paiement</p>
+    <div class="pay-methods" id="csMethods">${Object.entries(PAY).map(([k, v], i) =>
+      `<button type="button" data-m="${k}" class="${i === 0 ? 'on' : ''}">${v}</button>`).join('')}</div>
+    <div class="modal-actions"><button class="bo-btn" data-close>Annuler</button>
+    <button class="bo-btn primary" id="csSave">Clôturer</button></div>`, (m) => {
+    let method = 'espece';
+    const methodsEl = m.querySelector('#csMethods');
+    methodsEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      method = b.dataset.m;
+      methodsEl.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    }));
+    m.querySelector('#csSave').addEventListener('click', async () => {
+      await db.closeSale(saleId, method);
+      closeModal();
+      await onDone();
+    });
+  });
 }
 
 const LOC_LABEL = { physique: 'Physique', en_ligne: 'En ligne', salarie: 'Salariés', archive: 'Archive', reserve: 'Réserve' };

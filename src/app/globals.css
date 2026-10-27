@@ -169,6 +169,9 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .pay-methods button.on{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 12%,transparent);color:var(--ink)}
 .receipt{display:flex;align-items:center;gap:9px;font-weight:600;color:var(--ink-soft)}
 .receipt input{width:20px;height:20px}
+.pay-pending-toggle{background:none;border:none;color:var(--ink-soft);font-weight:700;font-size:13px;
+  text-decoration:underline;cursor:pointer;padding:4px}
+.pay-pending-form{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px dashed var(--line);border-radius:11px}
 .match-list{padding:14px;display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .match-list button{padding:14px;border:1px solid var(--line);background:var(--panel);border-radius:11px;
   font-weight:800;cursor:pointer;text-align:left;color:var(--ink)}
@@ -212,6 +215,9 @@ select.flash-ok,input.flash-ok,.cat-badge-sel.flash-ok{border-color:var(--green)
 .bo-tabs button{border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);font-weight:700;
   font-size:14px;padding:9px 14px;border-radius:10px;cursor:pointer}
 .bo-tabs button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+.bo-badge{display:inline-block;background:var(--amber-bg);color:var(--amber);font-size:11px;font-weight:800;
+  padding:1px 7px;border-radius:999px;margin-left:5px;vertical-align:middle}
+.bo-tabs button.on .bo-badge{background:rgba(255,255,255,.25);color:#fff}
 .bo-body{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px}
 .bo-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .bo-input{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:9px;padding:9px 11px;
@@ -403,6 +409,7 @@ select.cat-badge-sel{border:1px solid var(--line);cursor:pointer;max-width:140px
 .match-logo.empty{display:inline-block;width:26px;height:26px;border:1px dashed var(--line);border-radius:5px}
 .match-list button{display:flex;align-items:center;gap:11px}
 .match-acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.att-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
 /* =========================================================
    LOADERS (par page / sous-vue)

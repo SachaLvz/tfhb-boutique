@@ -535,6 +535,18 @@ export async function allSales(seasonId) {
   return seasonId ? rows.filter((r) => r.season_id === seasonId) : rows;
 }
 
+/** Clôture un paiement en attente : fixe le moyen de paiement, comme un encaissement classique. */
+export async function closeSale(saleId, paymentMethod) {
+  const sale = await getOne('sales', saleId);
+  if (!sale || sale.deleted) return;
+  sale.payment_method = paymentMethod;
+  sale.payment_status = 'paid';
+  sale.updated_at = now();
+  await putMany('sales', [sale]);
+  await logChange('sale', sale);
+  return sale;
+}
+
 // ===================== BACK-OFFICE (Lot 2) =====================
 
 // --- produits / variantes ---

@@ -12,10 +12,14 @@ const STOCK_LOCS = ['physique', 'en_ligne']; // « stock restant » (réserve & 
 export async function renderFinances(host, ctx = {}) {
   const seasonId = await db.activeSeasonId();
   const season = await db.activeSeason();
-  const [products, stockArr, sales, invoices, adjust] = await Promise.all([
+  const [products, stockArr, salesRaw, invoices, adjust] = await Promise.all([
     db.listProducts(), db.getAll('stock'), db.allSales(seasonId), db.listInvoices(seasonId), db.listFinAdjust(seasonId),
   ]);
   const stock = Object.fromEntries(stockArr.filter((s) => !s.deleted).map((s) => [s.sku, s]));
+  // les paiements en attente ne comptent pas encore comme recette perçue
+  const pendingSales = salesRaw.filter((s) => s.payment_status === 'pending');
+  const sales = salesRaw.filter((s) => s.payment_status !== 'pending');
+  const pendingTotal = pendingSales.reduce((a, s) => a + (s.total || 0), 0);
 
   // ---- valorisation du stock ----
   const valo = { pv: 0, pa: 0, units: 0, paMissing: 0 };
@@ -80,7 +84,7 @@ export async function renderFinances(host, ctx = {}) {
   <div class="fin">
     <div class="fin-season">Saison <b>${season ? season.label : '—'}</b><span class="muted"> · indicateurs de la saison active</span></div>
     <div class="fin-kpis">
-      ${kpi('Total recettes', eur(dRecettes), `${nbVentes} ventes${manualRecettes ? ' + ' + eur(manualRecettes) + ' manuel' : ''} · panier moyen ${eur(panierMoyen)}`, 'blue', tag('recettes', manualRecettes))}
+      ${kpi('Total recettes', eur(dRecettes), `${nbVentes} ventes${manualRecettes ? ' + ' + eur(manualRecettes) + ' manuel' : ''} · panier moyen ${eur(panierMoyen)}${pendingSales.length ? ` · ${eur(pendingTotal)} en attente (${pendingSales.length})` : ''}`, 'blue', tag('recettes', manualRecettes))}
       ${kpi('Coûts (achat + marquage)', eur(dCouts), `Achat ${eur(coutAchat)} · Marquage ${eur(coutMarquage)}${manualCouts ? ' · +' + eur(manualCouts) + ' manuel' : ''}`, 'amber', tag('couts', manualCouts))}
       ${kpi('Bénéfices', eur(dBenef), 'Recettes − coûts', dBenef >= 0 ? 'green' : 'red', tag('benefices', false))}
       ${kpi('Valorisation stock', eur(dValo), `au prix de vente · ${valo.units} articles`, 'violet', tag('valo_pv', false))}

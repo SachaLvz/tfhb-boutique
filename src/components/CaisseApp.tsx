@@ -88,6 +88,20 @@ export default function CaisseApp() {
             <button className="encais" id="payConfirm" type="button">
               Valider la vente
             </button>
+            <button className="pay-pending-toggle" id="payPendingToggle" type="button">
+              ⏱ Paiement en attente
+            </button>
+            <div className="pay-pending-form" id="payPendingForm" hidden>
+              <p className="pay-sub">Raison (le client reviendra payer)</p>
+              <input
+                id="pendingReason"
+                className="bo-input"
+                placeholder="Ex : revient payer après le match"
+              />
+              <button className="bo-btn primary" id="payPendingConfirm" type="button">
+                Mettre en attente
+              </button>
+            </div>
           </div>
         </div>
       </div>
