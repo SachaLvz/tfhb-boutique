@@ -132,15 +132,13 @@ async function loadFromCloud() {
     return;
   }
   try {
-    // Si un push a été coupé, renvoyer le cache local avant de le remplacer.
-    if (await sync.hasPendingPush()) {
-      showPageLoader('Envoi du cache local vers Supabase…');
-      await sync.pushAll();
-    }
+    // Ne pas renvoyer un cache local douteux au boot : on charge Supabase.
+    if (await sync.hasPendingPush()) await sync.clearPendingPush();
     await sync.pullAll({ omitPhotos: true });
   } catch (e) {
     console.warn('[boot] pull Supabase', e);
-    showPageError('Impossible de charger les données depuis Supabase.');
+    const detail = e && e.message ? ` ${e.message}` : '';
+    showPageError('Impossible de charger les données depuis Supabase.' + detail);
     wirePageRetry(loadFromCloud);
     return;
   }

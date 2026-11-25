@@ -202,6 +202,11 @@ export async function hasPendingPush() {
   return !!(await db.kvGet('pending_push', false));
 }
 
+export async function clearPendingPush() {
+  dirty = false;
+  await db.kvSet('pending_push', false);
+}
+
 /** Écriture utilisateur : push immédiat vers Supabase. */
 export function schedulePush() {
   writeEpoch++;

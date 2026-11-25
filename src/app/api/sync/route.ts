@@ -462,7 +462,17 @@ export async function POST(req: NextRequest) {
 
       pushed += await upsert(c, "stock", (batch.stock || []).map(mapStock), "sku");
       pushed += await upsert(c, "matches", (batch.matches || []).map(mapMatch));
-      pushed += await upsert(c, "sales", (batch.sales || []).map(mapSale));
+      try {
+        pushed += await upsert(c, "sales", (batch.sales || []).map(mapSale));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/comment/i.test(msg) && /does not exist|schema cache/i.test(msg)) {
+          const rows = (batch.sales || []).map(mapSale).map(({ comment: _c, ...rest }: { comment?: unknown }) => rest);
+          pushed += await upsert(c, "sales", rows);
+        } else {
+          throw e;
+        }
+      }
 
       const saleIds = (batch.sales || []).map((s: any) => s.id);
       if (saleIds.length) {
