@@ -180,6 +180,23 @@ export function syncNow(opts = {}) {
   }));
 }
 
+/** Lit Supabase sans écraser IndexedDB. */
+export async function fetchRemote(opts = {}) {
+  return callApi('pull', opts);
+}
+
+/** Pousse seulement le lot fourni (sans dump complet du cache). */
+export function pushPartial(batch) {
+  return enqueueSync(() => withSyncing(async () => {
+    const [active_season, categories] = await Promise.all([
+      db.kvGet('active_season', null),
+      db.kvGet('categories', null),
+    ]);
+    const { pushed } = await callApi('push', { batch, meta: { active_season, categories } });
+    return pushed;
+  }));
+}
+
 /** Au démarrage : charge uniquement depuis Supabase. */
 export async function loadDynamicData(opts = {}) {
   if (!(await isConfigured())) throw new Error('Supabase non configuré');

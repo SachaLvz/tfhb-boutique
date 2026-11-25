@@ -14,6 +14,57 @@ function flashOk(node) {
   node.classList.add('flash-ok');
 }
 
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+const eur = (v) => (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('fr-FR') + ' €';
+
+function closeCacheModal() {
+  const h = document.getElementById('modalHost');
+  if (h) h.innerHTML = '';
+}
+
+function openCacheModal(html, after) {
+  const hostEl = document.getElementById('modalHost');
+  if (!hostEl) return;
+  closeCacheModal();
+  const ov = document.createElement('div');
+  ov.className = 'ov on';
+  ov.innerHTML = `<div class="sheet modal import-wide">${html}</div>`;
+  hostEl.appendChild(ov);
+  ov.addEventListener('click', (e) => { if (e.target === ov) closeCacheModal(); });
+  ov.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeCacheModal));
+  if (after) after(ov);
+}
+
+function renderCacheDiff(diff) {
+  const matchRows = (diff.missingMatches || []).map((m) =>
+    `<tr><td><b>${escHtml(m.code || '—')}</b></td><td>${escHtml(m.label || '—')}</td></tr>`).join('')
+    || '<tr><td colspan="2" class="muted">Aucun match manquant</td></tr>';
+  const saleRows = (diff.salesByMatch || []).map((g) =>
+    `<tr><td>${escHtml(g.label)}</td><td class="num">${g.n}</td><td class="num">${g.qty}</td><td class="num">${eur(g.total)}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Aucune vente manquante</td></tr>';
+  return `
+    <div class="cache-diff-kpis">
+      <div><span>Déjà en base</span><b>${diff.alreadyMatches} matchs · ${diff.alreadySales} ventes · ${diff.alreadyMoves} mvts</b></div>
+      <div class="add"><span>À réimporter</span><b>${diff.missingMatches.length} matchs · ${diff.salesToImport.length} ventes · ${diff.missingMoves.length} mvts</b></div>
+    </div>
+    <h4>Matchs absents de Supabase</h4>
+    <div class="bo-tablewrap cache-diff-wrap"><table class="bo-table import-recap">
+      <thead><tr><th>Code</th><th>Nom</th></tr></thead>
+      <tbody>${matchRows}</tbody>
+    </table></div>
+    <h4>Ventes absentes de Supabase</h4>
+    <div class="bo-tablewrap cache-diff-wrap"><table class="bo-table import-recap">
+      <thead><tr><th>Match</th><th class="num">Tickets</th><th class="num">Articles</th><th class="num">Total estimé</th></tr></thead>
+      <tbody>${saleRows}</tbody>
+    </table></div>
+    <p class="muted mini">Les totaux des ventes recréées depuis le journal utilisent le prix catalogue actuel (paiement noté « espèces »). Le stock n’est pas rejoué.</p>`;
+}
+
 // Redimensionne un logo (garde la transparence -> PNG), max px.
 function resizeLogo(file, max) {
   return new Promise((resolve, reject) => {
@@ -69,9 +120,11 @@ export async function renderReglages(host, context) {
         <button id="sbTest" class="bo-btn">Tester la connexion</button>
         <button id="sbSync" class="bo-btn primary">↻ Synchroniser maintenant</button>
       </div>
-      <p class="muted mini">Si un match (ou des ventes) est resté dans le navigateur sans partir vers Supabase, pousse d’abord le cache — sans recharger la page. Ouvre aussi <code>?cache=1</code> pour lire IndexedDB sans l’écraser.</p>
+      <p class="muted mini">Avant de réimporter un cache, un comparatif montre ce qui est déjà dans Supabase et ce qui sera ajouté. Seul le manquant est envoyé.</p>
       <div class="reg-actions">
-        <button id="sbPushCache" class="bo-btn">Pousser le cache local</button>
+        <button id="sbPushCache" class="bo-btn">Comparer / réimporter le cache local</button>
+        <button id="sbImportCache" class="bo-btn">Importer un dump JSON</button>
+        <input type="file" id="sbImportCacheFile" accept="application/json,.json" hidden>
         <button id="sbRestoreMatches" class="bo-btn">Réinjecter le calendrier 26/27</button>
         <button id="sbDumpCache" class="bo-btn">Télécharger le cache (JSON)</button>
       </div>
@@ -144,14 +197,64 @@ export async function renderReglages(host, context) {
       renderReglages(host, ctx);
     } catch (e) { msg('Erreur de synchro : ' + e.message, 'err'); }
   });
+  const previewThenImport = async (cache, title) => {
+    msg('Comparaison avec Supabase…');
+    const remote = await sync.fetchRemote({ omitPhotos: true });
+    const diff = db.diffCacheToRemote(cache, remote);
+    msg('');
+    openCacheModal(`
+      <h3>${escHtml(title)}</h3>
+      <p class="muted">Voici ce qui manque dans Supabase, et ce qui sera réimporté. Rien d’autre n’est écrasé.</p>
+      ${renderCacheDiff(diff)}
+      <div class="modal-actions">
+        <button type="button" class="bo-btn" data-close>Annuler</button>
+        <button type="button" class="bo-btn primary" id="cacheImportGo" ${diff.totalToImport ? '' : 'disabled'}>
+          ${diff.totalToImport ? `Réimporter le manquant (${diff.totalToImport})` : 'Rien à importer'}
+        </button>
+      </div>`, (ov) => {
+      const go = ov.querySelector('#cacheImportGo');
+      if (!go || !diff.totalToImport) return;
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        go.textContent = 'Import…';
+        try {
+          await db.applyCacheImport(diff);
+          const n = await sync.pushPartial({
+            matches: diff.missingMatches,
+            sales: diff.salesToImport,
+            stock_moves: diff.missingMoves,
+          });
+          closeCacheModal();
+          msg(`Import OK ✓ — ${diff.salesToImport.length} vente(s), ${diff.missingMoves.length} mouvement(s), ${n} envoyés.`, 'ok');
+          ctx.toast('Manquant réimporté vers Supabase');
+          ctx.onChanged && ctx.onChanged();
+        } catch (e) {
+          go.disabled = false;
+          go.textContent = `Réimporter le manquant (${diff.totalToImport})`;
+          msg('Erreur : ' + e.message, 'err');
+        }
+      });
+    });
+  };
+
   host.querySelector('#sbPushCache').addEventListener('click', async () => {
-    msg('Envoi du cache IndexedDB…');
     try {
-      const n = await sync.pushAll();
-      msg(`Cache poussé ✓ — ${n} enregistrements envoyés vers Supabase.`, 'ok');
-      ctx.toast('Cache local envoyé');
-      flashOk(host.querySelector('#sbPushCache'));
+      const state = await db.exportState();
+      await previewThenImport(state, 'Comparatif cache local → Supabase');
     } catch (e) { msg('Erreur : ' + e.message, 'err'); }
+  });
+  host.querySelector('#sbImportCache').addEventListener('click', () => {
+    host.querySelector('#sbImportCacheFile').click();
+  });
+  host.querySelector('#sbImportCacheFile').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      if (!payload || typeof payload !== 'object') throw new Error('Fichier cache invalide');
+      await previewThenImport(payload, 'Comparatif dump JSON → Supabase');
+    } catch (err) { msg('Erreur : ' + err.message, 'err'); }
   });
   host.querySelector('#sbRestoreMatches').addEventListener('click', async () => {
     msg('Réinjection du calendrier domicile…');

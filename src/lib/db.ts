@@ -852,4 +852,145 @@ export async function applyRemoteRows(store, rows) {
   return n;
 }
 
+function unitPriceForSku(productsById, skuId, size) {
+  const { product_id } = splitSku(skuId);
+  const p = productsById.get(product_id);
+  const v = (p?.variants || []).find((x) => x.size === size);
+  return Number(v?.sale_price) || 0;
+}
+
+function linesFromVenteMoves(venteMoves, productsById) {
+  const merged = new Map();
+  for (const m of venteMoves) {
+    const skuId = m.sku;
+    const qty = Math.abs(Math.round(m.qty || 0));
+    if (!skuId || !qty) continue;
+    const cur = merged.get(skuId);
+    if (cur) cur.qty += qty;
+    else {
+      merged.set(skuId, {
+        sku: skuId,
+        name: m.product_name || skuId,
+        size: m.size || splitSku(skuId).size,
+        qty,
+      });
+    }
+  }
+  return [...merged.values()].map((l) => {
+    const unit = unitPriceForSku(productsById, l.sku, l.size);
+    return { sku: l.sku, name: l.name, size: l.size, qty: l.qty, unit, mode: 'plein', line_total: unit * l.qty };
+  });
+}
+
+function saleFromMoves(saleId, moves, productsById, matchById) {
+  const vente = moves.filter((m) => m.reason === 'vente');
+  if (!vente.length) return null;
+  const lines = linesFromVenteMoves(vente, productsById);
+  if (!lines.length) return null;
+  const first = vente[0];
+  const match = matchById.get(first.match_id);
+  const total = lines.reduce((a, l) => a + l.line_total, 0);
+  const createdAt = vente.map((m) => m.created_at).filter(Boolean).sort()[0] || now();
+  return {
+    id: saleId,
+    season_id: first.season_id || null,
+    matchId: first.match_id || null,
+    matchLabel: first.match_label || (match ? `${match.code} ${match.label}` : ''),
+    channel: match?.channel || 'physique',
+    payment_method: 'espece',
+    payment_status: 'paid',
+    pending_reason: null,
+    comment: null,
+    total,
+    com_total: 0,
+    lines,
+    deleted: false,
+    created_at: createdAt,
+    updated_at: now(),
+  };
+}
+
+/** Compare un cache (IndexedDB ou JSON) à l’état Supabase : ce qui manque vs déjà en base. */
+export function diffCacheToRemote(cache, remote) {
+  const products = remote.products || [];
+  const productsById = new Map(products.map((p) => [p.id, p]));
+  const matchById = new Map((remote.matches || []).concat(cache.matches || []).map((m) => [m.id, m]));
+  const remoteMatchIds = new Set((remote.matches || []).map((m) => m.id));
+  const remoteSaleIds = new Set((remote.sales || []).map((s) => s.id));
+  const remoteMoveIds = new Set((remote.stock_moves || []).map((m) => m.id));
+
+  const cacheMatches = (cache.matches || []).filter((m) => m && m.id);
+  const missingMatches = cacheMatches.filter((m) => !remoteMatchIds.has(m.id) && !m.deleted);
+  const alreadyMatches = cacheMatches.filter((m) => remoteMatchIds.has(m.id)).length;
+
+  const cacheSales = (cache.sales || []).filter((s) => s && s.id);
+  const missingFromSales = cacheSales.filter((s) => !remoteSaleIds.has(s.id));
+  const alreadySales = cacheSales.filter((s) => remoteSaleIds.has(s.id)).length;
+
+  const movesBySale = new Map();
+  for (const m of cache.stock_moves || []) {
+    if (m.deleted || !m.sale_id) continue;
+    if (m.reason !== 'vente' && m.reason !== 'remboursement') continue;
+    const arr = movesBySale.get(m.sale_id) || [];
+    arr.push(m);
+    movesBySale.set(m.sale_id, arr);
+  }
+
+  const salesToImport = [];
+  const seen = new Set();
+  for (const s of missingFromSales) {
+    const ms = movesBySale.get(s.id) || [];
+    const rebuilt = ms.length ? saleFromMoves(s.id, ms, productsById, matchById) : null;
+    const lines = (s.lines && s.lines.length) ? s.lines : (rebuilt?.lines || []);
+    const total = Number(s.total) || rebuilt?.total || lines.reduce((a, l) => a + (Number(l.line_total) || 0), 0);
+    salesToImport.push({
+      ...s,
+      lines,
+      total,
+      matchLabel: s.matchLabel || rebuilt?.matchLabel || '',
+      updated_at: now(),
+    });
+    seen.add(s.id);
+  }
+  for (const [saleId, ms] of movesBySale) {
+    if (remoteSaleIds.has(saleId) || seen.has(saleId)) continue;
+    const rec = saleFromMoves(saleId, ms, productsById, matchById);
+    if (!rec) continue;
+    salesToImport.push(rec);
+    seen.add(saleId);
+  }
+
+  const missingMoves = (cache.stock_moves || []).filter((m) => m && m.id && !remoteMoveIds.has(m.id));
+  const alreadyMoves = (cache.stock_moves || []).filter((m) => m && remoteMoveIds.has(m.id)).length;
+
+  const salesByMatch = [];
+  const grouped = new Map();
+  for (const s of salesToImport) {
+    const k = s.matchLabel || 'Sans match';
+    const g = grouped.get(k) || { label: k, n: 0, qty: 0, total: 0 };
+    g.n++;
+    g.qty += (s.lines || []).reduce((a, l) => a + (Number(l.qty) || 0), 0);
+    g.total += Number(s.total) || 0;
+    grouped.set(k, g);
+  }
+  for (const g of grouped.values()) salesByMatch.push(g);
+
+  return {
+    alreadyMatches,
+    missingMatches,
+    alreadySales,
+    salesToImport,
+    salesByMatch,
+    alreadyMoves,
+    missingMoves,
+    totalToImport: missingMatches.length + salesToImport.length + missingMoves.length,
+  };
+}
+
+export async function applyCacheImport(diff) {
+  if (diff.missingMatches?.length) await putMany('matches', diff.missingMatches);
+  if (diff.salesToImport?.length) await putMany('sales', diff.salesToImport);
+  if (diff.missingMoves?.length) await putMany('stock_moves', diff.missingMoves);
+}
+
 export { uid, now, sku };

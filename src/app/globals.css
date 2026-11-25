@@ -269,6 +269,13 @@ select.cat-badge-sel{border:1px solid var(--line);cursor:pointer;max-width:140px
 .pdf-drop strong{font-size:15px;color:var(--ink)}
 .import-recap-wrap{max-height:min(42vh,360px);margin:12px 0}
 .import-recap{min-width:0 !important}
+.cache-diff-kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 16px}
+.cache-diff-kpis > div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg)}
+.cache-diff-kpis span{display:block;font-size:11px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;color:var(--ink-soft)}
+.cache-diff-kpis b{display:block;margin-top:4px;font-size:14px}
+.cache-diff-kpis .add{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 8%,transparent)}
+.cache-diff-wrap{max-height:min(22vh,180px);margin:0 0 14px}
+.sheet.modal.import-wide h4{margin:12px 0 6px;font-size:14px}
 .import-product-grid{
   display:flex;flex-direction:column;gap:12px;max-height:min(56vh,520px);overflow:auto;
   margin:12px 0;padding-right:4px;

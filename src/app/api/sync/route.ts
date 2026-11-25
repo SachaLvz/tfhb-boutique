@@ -499,11 +499,14 @@ export async function POST(req: NextRequest) {
         if (!isMissingTable(e)) throw e;
       }
 
-      const metaRows = [
-        { key: "active_season", value: meta.active_season ?? null, updated_at: now() },
-        { key: "categories", value: meta.categories ?? null, updated_at: now() },
-      ];
-      pushed += await upsert(c, "app_meta", metaRows, "key");
+      const metaRows = [];
+      if (Object.prototype.hasOwnProperty.call(meta, "active_season")) {
+        metaRows.push({ key: "active_season", value: meta.active_season ?? null, updated_at: now() });
+      }
+      if (Object.prototype.hasOwnProperty.call(meta, "categories")) {
+        metaRows.push({ key: "categories", value: meta.categories ?? null, updated_at: now() });
+      }
+      if (metaRows.length) pushed += await upsert(c, "app_meta", metaRows, "key");
 
       return NextResponse.json({ pushed });
     }
