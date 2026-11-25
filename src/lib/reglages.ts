@@ -47,6 +47,8 @@ function renderCacheDiff(diff) {
   const saleRows = (diff.salesByMatch || []).map((g) =>
     `<tr><td>${escHtml(g.label)}</td><td class="num">${g.n}</td><td class="num">${g.qty}</td><td class="num">${eur(g.total)}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">Aucune vente manquante</td></tr>';
+  const skipRows = (diff.skippedByMatch || []).map((g) =>
+    `<tr><td>${escHtml(g.label)}</td><td class="num">${g.n}</td><td>déjà ${g.alreadyRemote} vente(s) en base — probable re-saisie, ignoré</td></tr>`).join('');
   return `
     <div class="cache-diff-kpis">
       <div><span>Déjà en base</span><b>${diff.alreadyMatches} matchs · ${diff.alreadySales} ventes · ${diff.alreadyMoves} mvts</b></div>
@@ -62,7 +64,12 @@ function renderCacheDiff(diff) {
       <thead><tr><th>Match</th><th class="num">Tickets</th><th class="num">Articles</th><th class="num">Total estimé</th></tr></thead>
       <tbody>${saleRows}</tbody>
     </table></div>
-    <p class="muted mini">Les totaux des ventes recréées depuis le journal utilisent le prix catalogue actuel (paiement noté « espèces »). Le stock n’est pas rejoué.</p>`;
+    ${skipRows ? `<h4>Ignorées (déjà en base sur ce match)</h4>
+    <div class="bo-tablewrap cache-diff-wrap"><table class="bo-table import-recap">
+      <thead><tr><th>Match</th><th class="num">Journal</th><th></th></tr></thead>
+      <tbody>${skipRows}</tbody>
+    </table></div>` : ''}
+    <p class="muted mini">Les totaux des ventes recréées depuis le journal utilisent le prix catalogue actuel (paiement noté « espèces »). Le stock n’est pas rejoué. Un match qui a déjà des ventes en base n’est pas recréé depuis le journal (évite les doublons de re-saisie).</p>`;
 }
 
 // Redimensionne un logo (garde la transparence -> PNG), max px.

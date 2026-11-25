@@ -64,11 +64,19 @@ async function hydrateState() {
   await refreshStats();
 }
 
+let netWired = false;
 function revealUi() {
   buildNav();
   updateNet();
-  window.addEventListener('online', updateNet);
-  window.addEventListener('offline', updateNet);
+  showSyncWarn(saleCloudWarn);
+  if (!netWired) {
+    netWired = true;
+    window.addEventListener('online', () => {
+      updateNet();
+      void retryPendingPush();
+    });
+    window.addEventListener('offline', updateNet);
+  }
   wireOverlays();
   registerSW();
   return showCurrentView();
@@ -132,8 +140,13 @@ async function loadFromCloud() {
     return;
   }
   try {
-    // Ne pas renvoyer un cache local douteux au boot : on charge Supabase.
-    if (await sync.hasPendingPush()) await sync.clearPendingPush();
+    if (await sync.hasPendingPush()) {
+      try {
+        await sync.pushAll();
+      } catch (e) {
+        console.warn('[boot] push en attente', e);
+      }
+    }
     await sync.pullAll({ omitPhotos: true });
   } catch (e) {
     console.warn('[boot] pull Supabase', e);
@@ -161,6 +174,11 @@ export async function boot() {
   sync.onSyncing((on) => {
     syncing = on;
     updateNet();
+    if (!on && saleCloudWarn) {
+      void sync.hasPendingPush().then((pending) => {
+        if (!pending) showSyncWarn(false);
+      });
+    }
   });
   db.onLocalWrite(() => sync.schedulePush());
 
@@ -171,6 +189,7 @@ export async function boot() {
 async function resumeAfterRemount() {
   buildNav();
   updateNet();
+  showSyncWarn(saleCloudWarn);
   wireOverlays();
   await showCurrentView();
 }
@@ -195,14 +214,76 @@ async function showCurrentView() {
 }
 
 let syncing = false;
+let saleCloudWarn = false;
+const SALE_OFFLINE_MSG = 'Vente enregistrée sur cette caisse — pas de connexion internet. Elle partira dès que le réseau revient.';
+const PUSH_WAIT_MS = 8000;
+
+function showSyncWarn(on) {
+  saleCloudWarn = !!on;
+  const el = $('syncWarn');
+  if (el) el.hidden = !saleCloudWarn;
+  updateNet();
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryPendingPush() {
+  if (!(await sync.hasPendingPush())) {
+    showSyncWarn(false);
+    return;
+  }
+  const wasWarn = saleCloudWarn;
+  try {
+    await sync.pushAll();
+    showSyncWarn(false);
+    if (wasWarn) toast('Les ventes ont bien été envoyées ✓');
+  } catch (_) { /* le bandeau reste */ }
+}
+
+async function notifySaleCloud(okMsg) {
+  if (!navigator.onLine) {
+    showSyncWarn(true);
+    toast(SALE_OFFLINE_MSG, 'warn');
+    return;
+  }
+  try {
+    if (!(await sync.isConfigured())) {
+      showSyncWarn(true);
+      toast('Vente enregistrée sur cette caisse — impossible de l’envoyer pour le moment.', 'warn');
+      return;
+    }
+    const result = await Promise.race([
+      sync.pushAll().then(() => 'ok'),
+      waitMs(PUSH_WAIT_MS).then(() => 'timeout'),
+    ]);
+    if (result === 'ok' && !(await sync.hasPendingPush())) {
+      showSyncWarn(false);
+      toast(okMsg);
+      return;
+    }
+    showSyncWarn(true);
+    toast(SALE_OFFLINE_MSG, 'warn');
+  } catch (_) {
+    showSyncWarn(true);
+    toast(SALE_OFFLINE_MSG, 'warn');
+  }
+}
+
 function updateNet() {
   const chip = $('netChip');
   if (!chip) return;
   const on = navigator.onLine;
-  chip.classList.toggle('online', on && !syncing);
+  chip.classList.toggle('online', on && !syncing && !saleCloudWarn);
   chip.classList.toggle('syncing', !!syncing);
+  chip.classList.toggle('warn', !!saleCloudWarn && !syncing);
   const txt = $('netTxt');
-  if (txt) txt.textContent = syncing ? 'Synchro…' : (on ? 'En ligne' : 'Hors-ligne');
+  if (txt) {
+    txt.textContent = syncing
+      ? 'Synchro…'
+      : (saleCloudWarn ? 'Pas envoyé' : (on ? 'En ligne' : 'Hors-ligne'));
+  }
 }
 
 // ---------- navigation ----------
@@ -457,6 +538,8 @@ function openPay() {
   $('saleComment').value = '';
   $('payPendingForm').hidden = true;
   $('pendingReason').value = '';
+  const payWarn = $('payCloudWarn');
+  if (payWarn) payWarn.hidden = navigator.onLine && !saleCloudWarn;
   $('payOv').classList.add('on');
 }
 async function confirmPay() {
@@ -481,7 +564,7 @@ async function confirmPay() {
   $('payOv').classList.remove('on');
   await refreshStats();
   renderCart(); renderCat(); renderStats();
-  toast('Vente enregistrée ✓ stock mis à jour');
+  await notifySaleCloud('Vente enregistrée ✓ stock mis à jour');
   if (wantReceipt) printReceipt(rec);
 }
 async function confirmPending() {
@@ -508,7 +591,7 @@ async function confirmPending() {
   $('payOv').classList.remove('on');
   await refreshStats();
   renderCart(); renderCat(); renderStats();
-  toast('Vente mise en attente — à clôturer dans le Back-office');
+  await notifySaleCloud('Vente mise en attente — à clôturer dans le Back-office');
 }
 
 async function refreshStats() {
@@ -604,20 +687,21 @@ let tt;
 function toast(m, kind = 'ok') {
   const t = $('toast');
   if (!t) return;
-  const isErr = kind === 'err' || /erreur|invalide|requis|impossible|échec/i.test(String(m || ''));
+  const isWarn = kind === 'warn';
+  const isErr = !isWarn && (kind === 'err' || /erreur|invalide|requis|impossible|échec/i.test(String(m || '')));
   t.className = 'toast';
   t.replaceChildren();
   const ico = document.createElement('span');
   ico.className = 'toast-ico';
   ico.setAttribute('aria-hidden', 'true');
-  ico.textContent = isErr ? '!' : '✓';
+  ico.textContent = isErr || isWarn ? '!' : '✓';
   const txt = document.createElement('span');
   txt.textContent = m;
   t.append(ico, txt);
   void t.offsetWidth;
-  t.classList.add('on', isErr ? 'err' : 'ok');
+  t.classList.add('on', isErr ? 'err' : isWarn ? 'warn' : 'ok');
   clearTimeout(tt);
-  tt = setTimeout(() => t.classList.remove('on', 'ok', 'err'), 2800);
+  tt = setTimeout(() => t.classList.remove('on', 'ok', 'err', 'warn'), isWarn ? 7000 : 2800);
 }
 
 // ----- service worker -----

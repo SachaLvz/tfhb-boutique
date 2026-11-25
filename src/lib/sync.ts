@@ -129,6 +129,7 @@ async function pullAllNow(opts = {}) {
   }
 
   const epoch = writeEpoch;
+  const snapshot = opts.photosOnly ? null : await db.snapshotTillState();
   const r = await callApi('pull', opts);
   if (dirty || writeEpoch !== epoch) {
     return { pulled: 0, empty: false, skipped: true };
@@ -157,6 +158,11 @@ async function pullAllNow(opts = {}) {
     } catch (e) {
       console.warn('[sync] stock_moves', e);
     }
+  }
+  try {
+    await db.overlayTillAfterPull(snapshot, { sales: r.sales, stock: r.stock });
+  } catch (e) {
+    console.warn('[sync] overlay ventes locales', e);
   }
 
   let pulled = Object.values(stores).reduce((n, rows) => n + (rows?.length || 0), 0);

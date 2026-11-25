@@ -139,6 +139,7 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() 
 let _onWrite = null;
 export function onLocalWrite(fn) { _onWrite = fn; }
 async function touch() {
+  try { await kvSet('pending_push', true); } catch (_) { /* ignore */ }
   try { if (_onWrite) await _onWrite(); }
   catch (e) { console.warn('[sync] push', e); }
 }
@@ -503,12 +504,19 @@ export async function ensureMatches() {
 // --- ventes ---
 export async function recordSale(sale) {
   const season_id = await kvGet('active_season', null);
-  const rec = { id: uid(), created_at: now(), updated_at: now(), season_id, ...sale };
+  const rec = {
+    id: uid(),
+    created_at: now(),
+    updated_at: now(),
+    season_id,
+    ...sale,
+    lines: (sale.lines || []).map((l) => ({ ...l })),
+  };
   await putMany('sales', [rec]);
   // décrément du stock (emplacement selon canal)
   const loc = sale.channel === 'en_ligne' ? 'en_ligne' : 'physique';
-  for (const l of sale.lines) await adjustStock(l.sku, loc, -l.qty, { silent: true });
-  await recordStockMoves((sale.lines || []).map((l) => ({
+  for (const l of rec.lines) await adjustStock(l.sku, loc, -l.qty, { silent: true });
+  await recordStockMoves(rec.lines.map((l) => ({
     sku: l.sku,
     product_name: l.name,
     size: l.size,
@@ -520,8 +528,9 @@ export async function recordSale(sale) {
     match_id: sale.matchId || null,
     match_label: sale.matchLabel || '',
   })), { silent: true });
-  // la vente est déjà actée en local (IndexedDB) ; le push Supabase part en
-  // tâche de fond pour ne pas faire attendre la caisse sur le réseau
+  await kvSet('pending_push', true);
+  // IndexedDB est à jour (vente + lignes + stock + journal).
+  // Le push Supabase part en tâche de fond pour ne pas bloquer la caisse.
   void touch();
   return rec;
 }
@@ -830,6 +839,53 @@ export async function getSyncBatch() {
   return Object.fromEntries(entries);
 }
 
+/** Copie ventes + stock avant un pull, pour ne pas perdre une vente locale. */
+export async function snapshotTillState() {
+  const [sales, stock] = await Promise.all([getAll('sales'), getAll('stock')]);
+  return { sales, stock };
+}
+
+/**
+ * Après un pull : remet les ventes locales absentes du cloud,
+ * et les lignes si le distant les a perdues. Stock : le plus récent gagne.
+ */
+export async function overlayTillAfterPull(snapshot, remote) {
+  if (!snapshot) return { sales: 0, stock: 0 };
+  const remoteSales = remote.sales || [];
+  const remoteById = new Map(remoteSales.map((s) => [s.id, s]));
+  const salesToPut = [];
+  for (const s of snapshot.sales || []) {
+    if (!s || !s.id) continue;
+    const rem = remoteById.get(s.id);
+    if (!rem) {
+      salesToPut.push(s);
+      continue;
+    }
+    const localLines = s.lines || [];
+    const remLines = rem.lines || [];
+    if (localLines.length && !remLines.length) {
+      salesToPut.push({
+        ...rem,
+        lines: localLines,
+        total: s.total || rem.total,
+        payment_method: s.payment_method || rem.payment_method,
+        comment: s.comment != null ? s.comment : rem.comment,
+      });
+    }
+  }
+  if (salesToPut.length) await putMany('sales', salesToPut);
+
+  const remoteStock = new Map((remote.stock || []).map((s) => [s.sku, s]));
+  const stockToPut = [];
+  for (const s of snapshot.stock || []) {
+    if (!s || !s.sku) continue;
+    const rem = remoteStock.get(s.sku);
+    if (!rem || (s.updated_at || '') > (rem.updated_at || '')) stockToPut.push(s);
+  }
+  if (stockToPut.length) await putMany('stock', stockToPut);
+  return { sales: salesToPut.length, stock: stockToPut.length };
+}
+
 // Applique des lignes distantes en local ; renvoie le nombre d'écritures.
 export async function applyRemoteRows(store, rows) {
   if (!rows || !rows.length) return 0;
@@ -918,6 +974,13 @@ export function diffCacheToRemote(cache, remote) {
   const remoteMatchIds = new Set((remote.matches || []).map((m) => m.id));
   const remoteSaleIds = new Set((remote.sales || []).map((s) => s.id));
   const remoteMoveIds = new Set((remote.stock_moves || []).map((m) => m.id));
+  const remoteSalesByMatch = new Map();
+  for (const s of remote.sales || []) {
+    if (s.deleted) continue;
+    const k = s.matchLabel || s.match_label || '';
+    if (!k) continue;
+    remoteSalesByMatch.set(k, (remoteSalesByMatch.get(k) || 0) + 1);
+  }
 
   const cacheMatches = (cache.matches || []).filter((m) => m && m.id);
   const missingMatches = cacheMatches.filter((m) => !remoteMatchIds.has(m.id) && !m.deleted);
@@ -952,10 +1015,16 @@ export function diffCacheToRemote(cache, remote) {
     });
     seen.add(s.id);
   }
+  const skippedDuplicates = [];
   for (const [saleId, ms] of movesBySale) {
     if (remoteSaleIds.has(saleId) || seen.has(saleId)) continue;
     const rec = saleFromMoves(saleId, ms, productsById, matchById);
     if (!rec) continue;
+    const already = remoteSalesByMatch.get(rec.matchLabel) || 0;
+    if (already) {
+      skippedDuplicates.push({ ...rec, alreadyRemote: already });
+      continue;
+    }
     salesToImport.push(rec);
     seen.add(saleId);
   }
@@ -975,12 +1044,23 @@ export function diffCacheToRemote(cache, remote) {
   }
   for (const g of grouped.values()) salesByMatch.push(g);
 
+  const skippedByMatch = [];
+  const skippedGrouped = new Map();
+  for (const s of skippedDuplicates) {
+    const k = s.matchLabel || 'Sans match';
+    const g = skippedGrouped.get(k) || { label: k, n: 0, alreadyRemote: s.alreadyRemote || 0 };
+    g.n++;
+    skippedGrouped.set(k, g);
+  }
+  for (const g of skippedGrouped.values()) skippedByMatch.push(g);
+
   return {
     alreadyMatches,
     missingMatches,
     alreadySales,
     salesToImport,
     salesByMatch,
+    skippedByMatch,
     alreadyMoves,
     missingMoves,
     totalToImport: missingMatches.length + salesToImport.length + missingMoves.length,

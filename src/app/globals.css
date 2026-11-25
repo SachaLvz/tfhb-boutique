@@ -59,6 +59,7 @@ button{font-family:inherit;touch-action:manipulation}
 .chip.online{color:#8fe9b4}
 .chip.syncing{color:#9fd4ff}
 .chip.syncing .dot{animation:netPulse .9s ease-in-out infinite}
+.chip.warn{color:#ffd36a;border-color:rgba(242,185,12,.55);background:rgba(242,185,12,.14)}
 @keyframes netPulse{50%{opacity:.3}}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px rgba(255,255,255,.12)}
 
@@ -188,6 +189,15 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;oversc
 .toast .toast-ico{flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
   background:var(--green);color:#fff;font-size:13px;line-height:1}
 .toast.err .toast-ico{background:var(--red)}
+.toast.warn .toast-ico{background:var(--amber);color:#1a1400}
+.toast.warn{background:#4a3908;max-width:min(92vw,520px)}
+
+.sync-warn{background:var(--amber-bg);color:#7a5208;border-bottom:2px solid var(--amber);
+  padding:10px 16px;font-weight:700;font-size:14px;text-align:center;line-height:1.35}
+.sync-warn[hidden]{display:none!important}
+.pay-cloud-warn{margin:0 0 10px;padding:10px 12px;border-radius:10px;background:var(--amber-bg);
+  color:#7a5208;font-weight:700;font-size:13px;line-height:1.35}
+.pay-cloud-warn[hidden]{display:none!important}
 .toast.on{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0) scale(1);
   animation:toast-pop .45s cubic-bezier(.2,1.4,.3,1)}
 @keyframes toast-pop{
@@ -469,6 +479,7 @@ select.cat-badge-sel{border:1px solid var(--line);cursor:pointer;max-width:140px
   .match b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;display:inline-block;vertical-align:bottom}
   .chip{order:3;padding:6px 10px;font-size:11.5px}
   .chip #netTxt{display:none} /* pastille seule : plus compact */
+  .sync-warn{padding:8px 12px;font-size:13px;text-align:left}
   .tabs-main{order:4;flex:1 1 100%;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;
     gap:2px;scrollbar-width:none;padding-bottom:2px}
   .tabs-main::-webkit-scrollbar{display:none}

@@ -49,6 +49,11 @@ export default function CaisseApp() {
         </div>
       </header>
 
+      <div id="syncWarn" className="sync-warn" hidden role="status">
+        <strong>Pas de connexion internet.</strong>
+        {' '}Les ventes sont bien enregistrées sur cette caisse et partiront dès que le réseau revient.
+      </div>
+
       <main id="view">
         <div className="page-loader" role="status" aria-live="polite">
           <div className="page-loader-spin" aria-hidden />
@@ -90,6 +95,9 @@ export default function CaisseApp() {
               className="bo-input"
               placeholder="Ex : remise accordée, échange prévu…"
             />
+            <p id="payCloudWarn" className="pay-cloud-warn" hidden>
+              Pas de connexion internet : la vente sera tout de même enregistrée sur cette caisse.
+            </p>
             <label className="receipt">
               <input type="checkbox" id="wantReceipt" /> Générer un reçu (PDF)
             </label>
