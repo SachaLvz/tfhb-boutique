@@ -99,7 +99,23 @@ function ensureAutoSync() {
   });
 }
 
+function wantLocalCacheOnly() {
+  try {
+    return new URLSearchParams(location.search).get('cache') === '1';
+  } catch {
+    return false;
+  }
+}
+
 async function loadFromCloud() {
+  if (wantLocalCacheOnly()) {
+    showPageLoader('Chargement du cache IndexedDB…');
+    await hydrateState();
+    await revealUi();
+    toast('Cache local (sans écraser depuis Supabase)');
+    return;
+  }
+
   showPageLoader('Chargement depuis Supabase…');
   const configured = await sync.isConfigured();
   if (!configured) {
@@ -116,6 +132,11 @@ async function loadFromCloud() {
     return;
   }
   try {
+    // Si un push a été coupé, renvoyer le cache local avant de le remplacer.
+    if (await sync.hasPendingPush()) {
+      showPageLoader('Envoi du cache local vers Supabase…');
+      await sync.pushAll();
+    }
     await sync.pullAll({ omitPhotos: true });
   } catch (e) {
     console.warn('[boot] pull Supabase', e);

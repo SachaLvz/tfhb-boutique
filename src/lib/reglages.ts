@@ -56,6 +56,7 @@ export async function renderReglages(host, context) {
       <div class="reg-status">
         <span class="badge ${st.online ? 'ok' : 'off'}">${st.online ? 'En ligne' : 'Hors-ligne'}</span>
         <span class="badge ${st.configured ? 'ok' : 'warn'}">${st.configured ? 'Configuré' : 'Non configuré'}</span>
+        ${st.pendingPush ? '<span class="badge warn">Cache non poussé</span>' : ''}
         <span class="muted">Dernière synchro : <b>${lastSync}</b></span>
       </div>
 
@@ -67,6 +68,12 @@ export async function renderReglages(host, context) {
         <button id="sbSave" class="bo-btn">Enregistrer</button>
         <button id="sbTest" class="bo-btn">Tester la connexion</button>
         <button id="sbSync" class="bo-btn primary">↻ Synchroniser maintenant</button>
+      </div>
+      <p class="muted mini">Si un match (ou des ventes) est resté dans le navigateur sans partir vers Supabase, pousse d’abord le cache — sans recharger la page. Ouvre aussi <code>?cache=1</code> pour lire IndexedDB sans l’écraser.</p>
+      <div class="reg-actions">
+        <button id="sbPushCache" class="bo-btn">Pousser le cache local</button>
+        <button id="sbRestoreMatches" class="bo-btn">Réinjecter le calendrier 26/27</button>
+        <button id="sbDumpCache" class="bo-btn">Télécharger le cache (JSON)</button>
       </div>
       <p id="sbMsg" class="reg-msg"></p>
     </section>
@@ -136,6 +143,45 @@ export async function renderReglages(host, context) {
       ctx.onChanged && ctx.onChanged();
       renderReglages(host, ctx);
     } catch (e) { msg('Erreur de synchro : ' + e.message, 'err'); }
+  });
+  host.querySelector('#sbPushCache').addEventListener('click', async () => {
+    msg('Envoi du cache IndexedDB…');
+    try {
+      const n = await sync.pushAll();
+      msg(`Cache poussé ✓ — ${n} enregistrements envoyés vers Supabase.`, 'ok');
+      ctx.toast('Cache local envoyé');
+      flashOk(host.querySelector('#sbPushCache'));
+    } catch (e) { msg('Erreur : ' + e.message, 'err'); }
+  });
+  host.querySelector('#sbRestoreMatches').addEventListener('click', async () => {
+    msg('Réinjection du calendrier domicile…');
+    try {
+      await db.ensureMatches();
+      const n = await sync.pushAll();
+      msg(`Calendrier 26/27 réinjecté et poussé ✓ — ${n} enregistrements.`, 'ok');
+      ctx.toast('Matchs du calendrier envoyés');
+      ctx.onChanged && ctx.onChanged();
+      renderReglages(host, ctx);
+    } catch (e) { msg('Erreur : ' + e.message, 'err'); }
+  });
+  host.querySelector('#sbDumpCache').addEventListener('click', async () => {
+    try {
+      const state = await db.exportState();
+      const payload = {
+        exported_at: new Date().toISOString(),
+        matches: state.matches || [],
+        sales: state.sales || [],
+        stock_moves: state.stock_moves || [],
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'tfhb-cache-matches.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      msg(`Cache téléchargé — ${(payload.matches || []).length} matchs, ${(payload.sales || []).length} ventes.`, 'ok');
+      ctx.toast('Cache JSON téléchargé');
+    } catch (e) { msg('Erreur : ' + e.message, 'err'); }
   });
 
   // --- Saisons ---

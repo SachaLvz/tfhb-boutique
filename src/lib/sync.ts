@@ -98,6 +98,7 @@ export function pushAll() {
 }
 
 async function pushAllNow() {
+  await db.kvSet('pending_push', true);
   const [batch, active_season, categories] = await Promise.all([
     db.getSyncBatch(),
     db.kvGet('active_season', null),
@@ -105,6 +106,7 @@ async function pushAllNow() {
   ]);
   const { pushed } = await callApi('push', { batch, meta: { active_season, categories } });
   dirty = false;
+  await db.kvSet('pending_push', false);
   return pushed;
 }
 
@@ -191,7 +193,13 @@ export async function status() {
     configured: await isConfigured(),
     online: navigator.onLine,
     lastSync: await db.kvGet('last_sync', null),
+    pendingPush: !!(await db.kvGet('pending_push', false)),
   };
+}
+
+/** True si un push a échoué (ou a été interrompu) avant d’être confirmé. */
+export async function hasPendingPush() {
+  return !!(await db.kvGet('pending_push', false));
 }
 
 /** Écriture utilisateur : push immédiat vers Supabase. */
